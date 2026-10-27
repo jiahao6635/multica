@@ -591,7 +591,8 @@ func linkSharedHermesEntry(src, dst string) error {
 // survive — the bound skills still load from the task-local skills/ dir, which is
 // the point of the fix; only the user's global skills would be missing. The file
 // is written 0600 (it can hold inline api_key secrets) via atomic replace, so
-// reuse also repairs a prior file's permissions.
+// reuse also repairs a prior file's permissions. The terminal passthrough
+// allowlist preserves task credentials in tool shells without storing values.
 func writeDerivedHermesConfig(sharedHome, hermesHome string, env map[string]string, logger *slog.Logger) error {
 	srcConfig := filepath.Join(sharedHome, "config.yaml")
 	dstConfig := filepath.Join(hermesHome, "config.yaml")
@@ -622,6 +623,9 @@ func writeDerivedHermesConfig(sharedHome, hermesHome string, env map[string]stri
 		if err := setHermesExternalDirs(doc, computeHermesExternalDirs(sharedHome, nil, env)); err != nil {
 			return err
 		}
+		if err := setHermesTerminalEnvPassthrough(doc); err != nil {
+			return err
+		}
 		return marshalYAMLToFile(doc, dstConfig)
 	}
 
@@ -639,7 +643,98 @@ func writeDerivedHermesConfig(sharedHome, hermesHome string, env map[string]stri
 	// Supermemory/Hindsight/etc. bank isn't shared across managed tasks; the
 	// built-in per-task memories/ dir is already isolated above.
 	disableHermesMemoryProvider(&doc)
+	if err := setHermesTerminalEnvPassthrough(&doc); err != nil {
+		logger.Warn("execenv: hermes-home set terminal passthrough failed; copying verbatim", "error", err)
+		return writeFileAtomic(dstConfig, data, 0o600)
+	}
 	return marshalYAMLToFile(&doc, dstConfig)
+}
+
+// setHermesTerminalEnvPassthrough lets Multica CLI calls in Hermes tool shells
+// use the task environment already injected by the daemon. Only names are
+// persisted; user entries and other terminal settings remain intact.
+func setHermesTerminalEnvPassthrough(doc *yaml.Node) error {
+	top := yamlDocumentRoot(doc)
+	if top == nil {
+		return fmt.Errorf("hermes config: unexpected root node")
+	}
+	original := yamlMapValue(top, "terminal")
+	terminal := resolveHermesYAMLAlias(original)
+	if original != nil && terminal == nil {
+		return fmt.Errorf("hermes config: invalid terminal alias")
+	}
+	if terminal != nil {
+		// Decode validates recursive/excessive aliases before materializing references.
+		var validated any
+		if err := terminal.Decode(&validated); err != nil {
+			return fmt.Errorf("hermes terminal config: %w", err)
+		}
+	}
+	if terminal == nil || terminal.Kind != yaml.MappingNode {
+		if original != nil && original.Anchor != "" {
+			expandAliasesOf(doc, original)
+		}
+		terminal = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	} else {
+		// Detach references before replacing an anchored value. Other config fields
+		// must retain the original terminal settings and allowlist.
+		if existing := yamlMapValue(terminal, "env_passthrough"); existing != nil && existing.Anchor != "" {
+			expandAliasesOf(doc, existing)
+		}
+		if original.Anchor != "" {
+			expandAliasesOf(doc, original)
+		}
+		detached := *terminal
+		detached.Anchor = ""
+		detached.Content = append([]*yaml.Node(nil), terminal.Content...)
+		terminal = &detached
+	}
+	yamlSetMapValue(top, "terminal", terminal)
+	names := []string{}
+	seen := map[string]bool{}
+	add := func(name string) {
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	if existing := resolveHermesYAMLAlias(yamlMapValue(terminal, "env_passthrough")); existing != nil && existing.Kind == yaml.SequenceNode {
+		for _, entry := range existing.Content {
+			entry = resolveHermesYAMLAlias(entry)
+			if entry != nil && entry.Kind == yaml.ScalarNode && entry.Tag == "!!str" {
+				add(entry.Value)
+			}
+		}
+	}
+	for _, name := range []string{
+		"MULTICA_TOKEN",
+		"MULTICA_TASK_CONFIG_ROOT",
+		"MULTICA_TASK_WORKSPACES_ROOT",
+		"MULTICA_SERVER_URL",
+		"MULTICA_DAEMON_PORT",
+		"MULTICA_WORKSPACE_ID",
+		"MULTICA_AGENT_NAME",
+		"MULTICA_AGENT_ID",
+		"MULTICA_TASK_ID",
+		"MULTICA_TASK_SLOT",
+	} {
+		add(name)
+	}
+	yamlSetMapValue(terminal, "env_passthrough", yamlStringSeq(names))
+	return nil
+}
+
+// resolveHermesYAMLAlias follows references without looping on malformed nodes.
+func resolveHermesYAMLAlias(node *yaml.Node) *yaml.Node {
+	seen := map[*yaml.Node]bool{}
+	for node != nil && node.Kind == yaml.AliasNode {
+		if seen[node] {
+			return nil
+		}
+		seen[node] = true
+		node = node.Alias
+	}
+	return node
 }
 
 // disableHermesMemoryProvider forces skills-adjacent `memory.provider` to empty
