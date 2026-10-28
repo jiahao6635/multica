@@ -644,10 +644,31 @@ func writeDerivedHermesConfig(sharedHome, hermesHome string, env map[string]stri
 	// built-in per-task memories/ dir is already isolated above.
 	disableHermesMemoryProvider(&doc)
 	if err := setHermesTerminalEnvPassthrough(&doc); err != nil {
-		logger.Warn("execenv: hermes-home set terminal passthrough failed; copying verbatim", "error", err)
-		return writeFileAtomic(dstConfig, data, 0o600)
+		logger.Warn("execenv: hermes-home set terminal passthrough failed; keeping other derived settings", "error", err)
 	}
 	return marshalYAMLToFile(&doc, dstConfig)
+}
+
+// HermesTaskEnvPassthroughNames lists the daemon-owned task context that Hermes
+// tool subprocesses need, including optional autopilot and quick-create fields.
+// Only names are persisted; Hermes ignores names absent from the process env.
+func HermesTaskEnvPassthroughNames() []string {
+	return []string{
+		"MULTICA_TOKEN",
+		"MULTICA_TASK_CONFIG_ROOT",
+		"MULTICA_TASK_WORKSPACES_ROOT",
+		"MULTICA_SERVER_URL",
+		"MULTICA_DAEMON_PORT",
+		"MULTICA_WORKSPACE_ID",
+		"MULTICA_AGENT_NAME",
+		"MULTICA_AGENT_ID",
+		"MULTICA_TASK_ID",
+		"MULTICA_TASK_SLOT",
+		"MULTICA_AUTOPILOT_RUN_ID",
+		"MULTICA_AUTOPILOT_ID",
+		"MULTICA_QUICK_CREATE_TASK_ID",
+		"MULTICA_QUICK_CREATE_ATTACHMENT_IDS",
+	}
 }
 
 // setHermesTerminalEnvPassthrough lets Multica CLI calls in Hermes tool shells
@@ -670,20 +691,16 @@ func setHermesTerminalEnvPassthrough(doc *yaml.Node) error {
 			return fmt.Errorf("hermes terminal config: %w", err)
 		}
 	}
-	if terminal == nil || terminal.Kind != yaml.MappingNode {
-		if original != nil && original.Anchor != "" {
-			expandAliasesOf(doc, original)
+	// Preserve references to values we replace. Detach nested anchors first so
+	// aliases of the whole terminal section keep their original allowlist too.
+	for _, node := range []*yaml.Node{yamlMapValue(terminal, "env_passthrough"), original} {
+		if node != nil && node.Anchor != "" {
+			expandAliasesOf(doc, node)
 		}
+	}
+	if terminal == nil || terminal.Kind != yaml.MappingNode {
 		terminal = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	} else {
-		// Detach references before replacing an anchored value. Other config fields
-		// must retain the original terminal settings and allowlist.
-		if existing := yamlMapValue(terminal, "env_passthrough"); existing != nil && existing.Anchor != "" {
-			expandAliasesOf(doc, existing)
-		}
-		if original.Anchor != "" {
-			expandAliasesOf(doc, original)
-		}
 		detached := *terminal
 		detached.Anchor = ""
 		detached.Content = append([]*yaml.Node(nil), terminal.Content...)
@@ -706,18 +723,7 @@ func setHermesTerminalEnvPassthrough(doc *yaml.Node) error {
 			}
 		}
 	}
-	for _, name := range []string{
-		"MULTICA_TOKEN",
-		"MULTICA_TASK_CONFIG_ROOT",
-		"MULTICA_TASK_WORKSPACES_ROOT",
-		"MULTICA_SERVER_URL",
-		"MULTICA_DAEMON_PORT",
-		"MULTICA_WORKSPACE_ID",
-		"MULTICA_AGENT_NAME",
-		"MULTICA_AGENT_ID",
-		"MULTICA_TASK_ID",
-		"MULTICA_TASK_SLOT",
-	} {
+	for _, name := range HermesTaskEnvPassthroughNames() {
 		add(name)
 	}
 	yamlSetMapValue(terminal, "env_passthrough", yamlStringSeq(names))

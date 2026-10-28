@@ -837,6 +837,8 @@ func TestHermesTerminalEnvPassthrough(t *testing.T) {
 		"MULTICA_TOKEN", "MULTICA_TASK_CONFIG_ROOT", "MULTICA_TASK_WORKSPACES_ROOT",
 		"MULTICA_SERVER_URL", "MULTICA_DAEMON_PORT", "MULTICA_WORKSPACE_ID",
 		"MULTICA_AGENT_NAME", "MULTICA_AGENT_ID", "MULTICA_TASK_ID", "MULTICA_TASK_SLOT",
+		"MULTICA_AUTOPILOT_RUN_ID", "MULTICA_AUTOPILOT_ID",
+		"MULTICA_QUICK_CREATE_TASK_ID", "MULTICA_QUICK_CREATE_ATTACHMENT_IDS",
 	}
 	for _, tc := range []struct {
 		name, config string
@@ -867,8 +869,15 @@ func TestHermesTerminalEnvPassthrough(t *testing.T) {
 				TaskID:           "cccc1111-2222-3333-4444-555566667777",
 				Provider:         "hermes",
 				HermesSourceHome: shared,
-				HermesEnv:        map[string]string{"MULTICA_TOKEN": "mat_fixture_not_for_config", "UNRELATED_SECRET": "unrelated_fixture"},
-				Task:             task,
+				HermesEnv: map[string]string{
+					"MULTICA_TOKEN":                       "mat_fixture_not_for_config",
+					"MULTICA_AUTOPILOT_RUN_ID":            "autopilot_run_fixture",
+					"MULTICA_AUTOPILOT_ID":                "autopilot_fixture",
+					"MULTICA_QUICK_CREATE_TASK_ID":        "quick_create_fixture",
+					"MULTICA_QUICK_CREATE_ATTACHMENT_IDS": `["attachment_fixture"]`,
+					"UNRELATED_SECRET":                    "unrelated_fixture",
+				},
+				Task: task,
 			}, testLogger())
 			if err != nil {
 				t.Fatal(err)
@@ -931,7 +940,10 @@ func TestHermesTerminalEnvPassthrough(t *testing.T) {
 						t.Errorf("%s changed %s: got %v, want %v", phase, key, after[key], before[key])
 					}
 				}
-				for _, forbidden := range []string{"mat_fixture_not_for_config", "unrelated_fixture", "UNRELATED_SECRET", "STALE_KEY"} {
+				for _, forbidden := range []string{
+					"mat_fixture_not_for_config", "autopilot_run_fixture", "autopilot_fixture",
+					"quick_create_fixture", "attachment_fixture", "unrelated_fixture", "UNRELATED_SECRET", "STALE_KEY",
+				} {
 					if strings.Contains(string(data), forbidden) {
 						t.Errorf("%s config contains %s", phase, forbidden)
 					}
@@ -953,8 +965,6 @@ func TestHermesTerminalConfigInvalidAliases(t *testing.T) {
 	t.Parallel()
 	for _, config := range []string{
 		"terminal: *missing\n",
-		"terminal: &terminal {nested: *terminal}\n",
-		"names: &names [*names]\nterminal: {env_passthrough: *names}\n",
 	} {
 		source, overlay := t.TempDir(), t.TempDir()
 		mustWrite(t, filepath.Join(source, "config.yaml"), config)
@@ -974,6 +984,59 @@ func TestHermesTerminalConfigInvalidAliases(t *testing.T) {
 	for _, node := range []*yaml.Node{cycle, {Kind: yaml.AliasNode}} {
 		if got := resolveHermesYAMLAlias(node); got != nil {
 			t.Errorf("invalid alias resolved to %v", got)
+		}
+	}
+}
+
+func TestHermesTerminalConfigFailurePreservesDerivedSettings(t *testing.T) {
+	t.Parallel()
+	for _, terminalConfig := range []string{
+		"terminal: &terminal {nested: *terminal}\n",
+		"names: &names [*names]\nterminal: {env_passthrough: *names}\n",
+	} {
+		source, overlay := t.TempDir(), t.TempDir()
+		config := "model: hermes-4\nskills: {external_dirs: [custom-skills]}\nmemory: {provider: supermemory}\n" + terminalConfig
+		sourceConfig := filepath.Join(source, "config.yaml")
+		mustWrite(t, sourceConfig, config)
+		if err := writeDerivedHermesConfig(source, overlay, nil, testLogger()); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(overlay, "config.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var before, after yaml.Node
+		if err := yaml.Unmarshal([]byte(config), &before); err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal(data, &after); err != nil {
+			t.Fatal(err)
+		}
+		wantDirs := []string{filepath.Join(source, "custom-skills"), filepath.Join(source, "skills")}
+		if got := existingHermesExternalDirs(&after); !reflect.DeepEqual(got, wantDirs) {
+			t.Errorf("external_dirs = %v, want %v", got, wantDirs)
+		}
+		top := yamlDocumentRoot(&after)
+		provider := yamlMapValue(yamlMapValue(top, "memory"), "provider")
+		if provider == nil || provider.Value != "" {
+			t.Errorf("external memory provider was not disabled: %v", provider)
+		}
+		for _, key := range []string{"model", "terminal", "names"} {
+			original, err := yaml.Marshal(yamlMapValue(yamlDocumentRoot(&before), key))
+			if err != nil {
+				t.Fatal(err)
+			}
+			derived, err := yaml.Marshal(yamlMapValue(top, key))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(derived) != string(original) {
+				t.Errorf("changed %s: got %q, want %q", key, derived, original)
+			}
+		}
+		original, err := os.ReadFile(sourceConfig)
+		if err != nil || string(original) != config {
+			t.Fatalf("shared config changed: %v", err)
 		}
 	}
 }
