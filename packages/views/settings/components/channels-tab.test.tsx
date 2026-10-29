@@ -103,3 +103,10 @@ describe("ChannelsTab", () => {
     expect(screen.getByText("Lark detail")).toBeInTheDocument();
   });
 });
+
+
+it("labels an installed Feishu bot as bound without claiming connectivity", () => {
+  renderWithI18n(<ChannelsTab />);
+  expect(screen.getByRole("link", { name: /Lark Bound/ })).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: /Lark Connected/ })).toBeNull();
+});
