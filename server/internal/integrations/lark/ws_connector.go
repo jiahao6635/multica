@@ -2,6 +2,7 @@ package lark
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -74,7 +75,7 @@ type WSConnectorConfig struct {
 
 	// PingInterval is the fallback cadence for the app-layer ping.
 	// In production it is overridden per-installation by the
-	// PingInterval Lark returns in the bootstrap ClientConfig.
+	// PingInterval Lark returns in the bootstrap ClientConfig or a pong.
 	// Zero defaults to 2 minutes (matches the SDK default in
 	// `larksuite/oapi-sdk-go/v3/ws/client.go`).
 	PingInterval time.Duration
@@ -226,7 +227,8 @@ func (c *WSLongConnConnector) Run(ctx context.Context, inst Installation, emit E
 
 	// Ping loop: app-layer binary ping frames at the server's PingInterval.
 	pingDone := make(chan struct{})
-	go c.pingLoop(runCtx, conn, &writeMu, endpoint.ServiceID, pingInterval, log, pingDone)
+	pingUpdates := make(chan time.Duration)
+	go c.pingLoop(runCtx, conn, &writeMu, endpoint.ServiceID, pingInterval, pingUpdates, closeConn, log, pingDone)
 
 	defer func() {
 		runCancel()
@@ -283,13 +285,41 @@ func (c *WSLongConnConnector) Run(ctx context.Context, inst Installation, emit E
 			continue
 		}
 
-		// Control frames carry ping / pong / config updates. We
-		// only have to act on pings (reply with a pong); pongs and
-		// config payloads are accepted silently.
+		// Lark sends updated ClientConfig JSON in application-level pongs.
 		if frame.Method == FrameMethodControl {
-			if frame.HeaderValue(FrameHeaderTypeKey) == FrameHeaderTypePing {
+			switch frame.HeaderValue(FrameHeaderTypeKey) {
+			case FrameHeaderTypePing:
 				if werr := c.writeFrame(&writeMu, conn, NewPongFrame(endpoint.ServiceID)); werr != nil {
 					log.Warn("lark ws connector: pong write failed", "err", werr.Error())
+				}
+			case FrameHeaderTypePong:
+				if len(frame.Payload) == 0 {
+					break
+				}
+				var config struct {
+					PingInterval int64 `json:"PingInterval"`
+				}
+				if err := json.Unmarshal(frame.Payload, &config); err != nil {
+					log.Warn("lark ws connector: pong config decode failed", "err", err.Error())
+					break
+				}
+				// Seconds must fit in a positive time.Duration before conversion.
+				if config.PingInterval <= 0 || config.PingInterval > int64((1<<63-1)/time.Second) {
+					break
+				}
+				updated := time.Duration(config.PingInterval) * time.Second
+				if updated != pingInterval {
+					select {
+					case pingUpdates <- updated:
+						pingInterval = updated
+					case <-pingDone:
+						if ctx.Err() != nil {
+							return nil
+						}
+						return errors.New("ping loop stopped during config update")
+					case <-runCtx.Done():
+						return nil
+					}
 				}
 			}
 			continue
@@ -416,7 +446,7 @@ func (c *WSLongConnConnector) writeFrame(mu *sync.Mutex, conn WSConn, f *Frame) 
 // pingLoop sends a periodic app-layer ping frame on the cadence Lark
 // asked for. The previous implementation used WebSocket protocol PING
 // (WriteControl), which the SDK source confirms Lark ignores.
-func (c *WSLongConnConnector) pingLoop(ctx context.Context, conn WSConn, writeMu *sync.Mutex, serviceID int32, interval time.Duration, log *slog.Logger, done chan<- struct{}) {
+func (c *WSLongConnConnector) pingLoop(ctx context.Context, conn WSConn, writeMu *sync.Mutex, serviceID int32, interval time.Duration, updates <-chan time.Duration, closeConn func(), log *slog.Logger, done chan<- struct{}) {
 	defer close(done)
 	if interval <= 0 {
 		// A zero / negative interval would tick infinitely; bail out
@@ -430,12 +460,14 @@ func (c *WSLongConnConnector) pingLoop(ctx context.Context, conn WSConn, writeMu
 		select {
 		case <-ctx.Done():
 			return
+		case interval = <-updates:
+			t.Reset(interval)
 		case <-t.C:
 			if err := c.writeFrame(writeMu, conn, NewPingFrame(serviceID)); err != nil {
 				log.Warn("lark ws connector: ping write failed", "err", err.Error())
-				// Don't tear down here — the read loop will exit on
-				// its own when the conn dies. Closing here would race
-				// with the read loop's own cleanup.
+				// Closing unblocks ReadMessage so Run returns to Hub backoff.
+				// closeConn is shared with cleanup and guarded by sync.Once.
+				closeConn()
 				return
 			}
 		}

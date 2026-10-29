@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -878,4 +879,96 @@ func TestGorillaDialerProxyURLApplied(t *testing.T) {
 	}
 	// The error should be about the proxy connection (refused / timeout),
 	// not about the URL parsing.
+}
+
+func TestWSConnectorPongUpdatesPingInterval(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		conn := newFakeWSConn()
+		c := quietConnector(t, conn, FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }), 10*time.Second)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- c.Run(ctx, Installation{}, nil) }()
+		synctest.Wait()
+		pushPong := func(payload string) {
+			f := NewPongFrame(7)
+			f.Payload = []byte(payload)
+			conn.Push(f.Marshal())
+			synctest.Wait()
+		}
+		checkPings := func(wait time.Duration, want int) {
+			time.Sleep(wait)
+			synctest.Wait()
+			if got := len(conn.snapshot()); got != want {
+				t.Errorf("pings after %s = %d, want %d", wait, got, want)
+			}
+		}
+		pushPong(`{"PingInterval":2}`)
+		checkPings(2*time.Second, 1)
+		for _, payload := range []string{"", `{`, `{}`, `null`, `{"PingInterval":0}`, `{"PingInterval":-1}`, `{"PingInterval":"2"}`, `{"PingInterval":9223372036854775807}`} {
+			pushPong(payload)
+		}
+		checkPings(time.Second, 1)
+		// Unchanged configuration must not postpone the next heartbeat.
+		pushPong(`{"PingInterval":2}`)
+		checkPings(time.Second, 2)
+		pushPong(`{"PingInterval":5}`)
+		checkPings(4*time.Second, 2)
+		checkPings(time.Second, 3)
+		for _, raw := range conn.snapshot() {
+			f, err := UnmarshalFrame(raw)
+			if err != nil || f.Method != FrameMethodControl || f.HeaderValue(FrameHeaderTypeKey) != FrameHeaderTypePing || f.Service != 7 {
+				t.Errorf("unexpected heartbeat: frame=%+v err=%v", f, err)
+			}
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("Run on cancel: %v", err)
+		}
+		checkPings(time.Minute, 3)
+	})
+}
+
+func TestWSConnectorPingFailureUnblocksRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		conn := newFakeWSConn()
+		conn.writeErr = errors.New("injected ping failure")
+		c := quietConnector(t, conn, FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }), time.Second)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- c.Run(ctx, Installation{}, nil) }()
+		synctest.Wait()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Error("ping failure must return an error to Hub backoff")
+			}
+		default:
+			t.Error("Run stayed blocked after ping failure")
+			cancel()
+			<-done
+		}
+		select {
+		case <-conn.closed:
+		default:
+			t.Error("failed socket was not closed")
+		}
+		// The supervisor retries Connect after backoff; the same connector
+		// must start a fresh session without a surviving failed ping loop.
+		replacement := newFakeWSConn()
+		c.cfg.Dialer = &fakeWSDialer{conn: replacement}
+		go func() { done <- c.Run(ctx, Installation{}, nil) }()
+		synctest.Wait()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if got := len(replacement.snapshot()); got != 1 {
+			t.Errorf("replacement session pings = %d, want 1", got)
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("replacement Run on cancel: %v", err)
+		}
+	})
 }
