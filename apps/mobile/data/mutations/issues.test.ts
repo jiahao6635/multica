@@ -176,7 +176,7 @@ describe("useCancelTask", () => {
     await pending;
 
     expect(visibleBeforeAcknowledgement).toEqual([run, otherRun]);
-    // An accepted stop request is not a terminal task state. Refetch/WS owns it.
+    // The cached list changes only when an authoritative refetch/WS update arrives.
     expect(state.qc.getQueryData(activeKey)).toEqual([run, otherRun]);
     expect(state.result().isSuccess).toBe(true);
     expect(state.qc.getQueryState(activeKey)?.isInvalidated).toBe(true);
