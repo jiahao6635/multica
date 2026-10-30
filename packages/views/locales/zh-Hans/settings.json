@@ -946,7 +946,7 @@
     "inbound_pending": "已绑定，等待消息验证",
     "inbound_verified": "消息接收已验证",
     "inbound_pending_hint": "请在飞书/Lark 中给此机器人发送消息以验证接收。若未收到，请检查长连接模式、im.message.receive_v1 事件订阅以及应用发布和审批状态。已有绑定可能尚无验证记录。",
-    "inbound_verified_hint": "本次绑定已收到有效消息；这不代表持续在线、智能体 执行成功或回复成功。"
+    "inbound_verified_hint": "本次绑定已收到有效消息；这不代表持续在线、智能体执行成功或回复成功。"
   },
   "composio": {
     "page_description": "连接智能体可使用的应用。",

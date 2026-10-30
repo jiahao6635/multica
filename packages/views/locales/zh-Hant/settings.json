@@ -946,7 +946,7 @@
     "inbound_pending": "已綁定，等待訊息驗證",
     "inbound_verified": "訊息接收已驗證",
     "inbound_pending_hint": "請在飛書/Lark 中傳送訊息給此機器人以驗證接收。若未收到，請檢查長連線模式、im.message.receive_v1 事件訂閱，以及應用程式發布和審核狀態。既有綁定可能尚無驗證紀錄。",
-    "inbound_verified_hint": "本次綁定已收到有效訊息；這不代表持續連線、智慧體 執行成功或回覆成功。"
+    "inbound_verified_hint": "本次綁定已收到有效訊息；這不代表持續連線、智慧體執行成功或回覆成功。"
   },
   "composio": {
     "page_description": "連線智慧體可使用的應用。",
