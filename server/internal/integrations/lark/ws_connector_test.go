@@ -972,3 +972,55 @@ func TestWSConnectorPingFailureUnblocksRead(t *testing.T) {
 		}
 	})
 }
+
+func TestWSConnectorPongArmsUnarmedPingLoop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		conn := newFakeWSConn()
+		// A non-positive fallback leaves the ticker unarmed; a later pong
+		// must still be accepted and start heartbeats.
+		c := quietConnector(t, conn, FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }), -time.Second)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- c.Run(ctx, Installation{}, nil) }()
+		synctest.Wait()
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if got := len(conn.snapshot()); got != 0 {
+			t.Fatalf("pings before update = %d, want 0", got)
+		}
+		f := NewPongFrame(7)
+		f.Payload = []byte(`{"PingInterval":2}`)
+		conn.Push(f.Marshal())
+		synctest.Wait()
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if got := len(conn.snapshot()); got != 1 {
+			t.Errorf("pings after update = %d, want 1", got)
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("Run on cancel: %v", err)
+		}
+	})
+}
+
+func TestReadDeadlineForPingInterval(t *testing.T) {
+	t.Parallel()
+	const maxDuration = time.Duration(1<<63 - 1)
+	cases := []struct {
+		name       string
+		base, ping time.Duration
+		want       time.Duration
+	}{
+		{"default cadence keeps base", 6 * time.Minute, 2 * time.Minute, 6 * time.Minute},
+		{"short cadence keeps base", 6 * time.Minute, 2 * time.Second, 6 * time.Minute},
+		{"long cadence raises deadline", 6 * time.Minute, 5 * time.Minute, 15 * time.Minute},
+		{"non-positive cadence keeps base", 6 * time.Minute, -time.Second, 6 * time.Minute},
+		{"overflow saturates", 6 * time.Minute, maxDuration / 2, maxDuration},
+	}
+	for _, tc := range cases {
+		if got := readDeadlineFor(tc.base, tc.ping); got != tc.want {
+			t.Errorf("%s: readDeadlineFor(%s, %s) = %s, want %s", tc.name, tc.base, tc.ping, got, tc.want)
+		}
+	}
+}
