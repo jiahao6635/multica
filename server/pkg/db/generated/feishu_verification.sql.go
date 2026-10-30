@@ -11,6 +11,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const backfillLegacyFeishuInboundReceipts = `-- name: BackfillLegacyFeishuInboundReceipts :execrows
+WITH evidence AS MATERIALIZED (
+    SELECT installation.id, installation.installed_at, min(binding.created_at) AS received_at
+    FROM channel_installation AS installation
+    JOIN channel_chat_session_binding AS binding
+      ON binding.installation_id = installation.id
+     AND binding.channel_type = installation.channel_type
+     AND binding.created_at >= installation.installed_at
+    WHERE installation.channel_type = 'feishu'
+      AND installation.status = 'active'
+      AND installation.config->>'binding_generation' IS NULL
+      AND installation.config->>'first_message_received_at' IS NULL
+    GROUP BY installation.id, installation.installed_at
+    ORDER BY installation.id
+    LIMIT $1::int
+)
+UPDATE channel_installation AS installation
+SET config = jsonb_set(installation.config, '{first_message_received_at}', to_jsonb(evidence.received_at))
+FROM evidence
+WHERE installation.id = evidence.id
+  AND installation.installed_at = evidence.installed_at
+  AND installation.channel_type = 'feishu'
+  AND installation.status = 'active'
+  AND installation.config->>'binding_generation' IS NULL
+  AND installation.config->>'first_message_received_at' IS NULL
+`
+
+// Session routes are positive receipt evidence only for the current binding.
+// Materialize the candidate timestamp; recheck eligibility after any concurrent
+// writer, preserving live receipt writes and never validating a later rebind.
+func (q *Queries) BackfillLegacyFeishuInboundReceipts(ctx context.Context, batchSize int32) (int64, error) {
+	result, err := q.db.Exec(ctx, backfillLegacyFeishuInboundReceipts, batchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const recordFeishuInboundReceipt = `-- name: RecordFeishuInboundReceipt :exec
 UPDATE channel_installation
 SET config = jsonb_set(config, '{first_message_received_at}', to_jsonb(now()))
