@@ -5889,6 +5889,13 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		return
 	}
 
+	// The parent is the daemon lifecycle context; server cancellation only
+	// cancels runCtx and is discarded by the guards above. An interrupted
+	// shutdown run should wait for a healthy runtime before spending its retry.
+	if errors.Is(ctx.Err(), context.Canceled) && result.Status == "cancelled" && result.FailureReason == "" {
+		result.FailureReason = taskfailure.ReasonRuntimeOffline.String()
+		result.Comment = "daemon shut down while task was in flight"
+	}
 	d.reportTaskResult(ctx, task.ID, result, taskLog)
 
 	// Write GC metadata after the task finishes so the periodic GC loop
@@ -9159,11 +9166,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// shutdown): the parent context cancellation propagates here as
 		// context.Canceled and the fail callback runs. A user cancel or issue
 		// reassignment is discarded earlier by handleTask's cancelledByPoll
-		// branch, so this case is mainly defensive — and preserves the
-		// "cancelled" status string for the "agent finished" log line so
+		// branch. handleTask classifies a daemon shutdown separately using
+		// its lifecycle context, while this preserves the "cancelled" status so
 		// operators can distinguish a server cancellation from a real timeout.
 		//
-		// Comment stays empty on purpose. reportTaskResult forwards it as the
+		// For an ordinary cancellation, Comment stays empty on purpose.
+		// reportTaskResult forwards it as the
 		// task's `error`, which the UI shows verbatim under "Technical
 		// details", so a sentence written here would reach the reader
 		// untranslated. The status alone already yields failure_reason

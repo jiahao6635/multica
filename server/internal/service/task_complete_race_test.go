@@ -242,6 +242,11 @@ func TestProviderNetworkRetrySchedule(t *testing.T) {
 		{"provider_network with retry disabled (max_attempts=1) never retries", provNet, 1, 1, false},
 		{"timeout keeps single immediate retry", "timeout", 1, 2, true},
 		{"timeout exhausts at attempt 2", "timeout", 2, 2, false},
+		{"shutdown retries after runtime reconnects", "runtime_offline", 1, 2, true},
+		{"shutdown respects exhausted budget", "runtime_offline", 2, 2, false},
+		{"shutdown respects disabled retries", "runtime_offline", 1, 1, false},
+		{"explicit cancellation never retries", "cancelled", 1, 2, false},
+		{"cleanup uncertainty never retries", "cleanup_unconfirmed", 1, 2, false},
 		{"non-retryable reason never retries", "agent_error.unknown", 1, 2, false},
 	}
 	for _, tc := range eligCases {
