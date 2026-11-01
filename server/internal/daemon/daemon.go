@@ -5842,6 +5842,12 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 
 	if err != nil {
 		taskLog.Error("task failed", "error", err)
+		failureReason := taskRunFailureReason(err)
+		errorMessage := err.Error()
+		if errors.Is(ctx.Err(), context.Canceled) && onlyContextCancellation(err) {
+			failureReason = taskfailure.ReasonRuntimeOffline.String()
+			errorMessage = "daemon shut down while task was in flight: " + errorMessage
+		}
 		// runTask may have reached worktree finalization before returning the
 		// error. Preserve any delivery metadata that defer attached to the named
 		// result, especially the actual/preserved workdir and delivered branch.
@@ -5852,11 +5858,11 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		if failErr := d.reportTerminalTask(ctx, terminalTaskReport{
 			kind:             terminalTaskReportFail,
 			taskID:           task.ID,
-			errorMessage:     err.Error(),
+			errorMessage:     errorMessage,
 			branchName:       result.BranchName,
 			workDir:          result.WorkDir,
 			durableWorkDir:   result.DurableWorkDir,
-			failureReason:    taskRunFailureReason(err),
+			failureReason:    failureReason,
 			retiredSessionID: result.RetiredSessionID,
 		}); failErr != nil {
 			taskLog.Error("fail task callback failed", "error", failErr)
@@ -5963,6 +5969,34 @@ func (e *environmentSetupError) Unwrap() error { return e.err }
 // failure. The message is untouched, so the wrapper is invisible to everything
 // except taskRunFailureReason.
 func asEnvironmentSetupFailure(err error) error { return &environmentSetupError{err: err} }
+
+// Only cancellation leaves may become a shutdown interruption. Joined real
+// failures and worktree-finalization failures keep their own classification.
+func onlyContextCancellation(err error) bool {
+	if err == context.Canceled {
+		return true
+	}
+	if _, preserved := err.(*worktreePreservedError); preserved {
+		return false
+	}
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() []error }:
+		children := wrapped.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !onlyContextCancellation(child) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return onlyContextCancellation(wrapped.Unwrap())
+	default:
+		return false
+	}
+}
 
 func taskCancelAcknowledgement(result TaskResult, runErr error, provider string) TaskCancelAck {
 	ack := TaskCancelAck{BranchName: result.BranchName, DurableWorkDir: result.DurableWorkDir, RetiredSessionID: result.RetiredSessionID}
@@ -6248,13 +6282,18 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 		}
 		taskLog.Error("local_directory: lock acquire failed", "error", err)
 		failureReason := "local_directory_error"
+		errorMessage := fmt.Sprintf("local_directory wait cancelled: %s", err.Error())
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			failureReason = "cancelled"
+		}
+		if errors.Is(ctx.Err(), context.Canceled) && onlyContextCancellation(err) {
+			failureReason = taskfailure.ReasonRuntimeOffline.String()
+			errorMessage = "daemon shut down while waiting for local_directory"
 		}
 		if failErr := d.reportTerminalTask(ctx, terminalTaskReport{
 			kind:          terminalTaskReportFail,
 			taskID:        task.ID,
-			errorMessage:  fmt.Sprintf("local_directory wait cancelled: %s", err.Error()),
+			errorMessage:  errorMessage,
 			failureReason: failureReason,
 		}); failErr != nil {
 			taskLog.Error("fail task after local_directory lock cancel", "error", failErr)
