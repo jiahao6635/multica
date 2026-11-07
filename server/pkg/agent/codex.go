@@ -3765,6 +3765,31 @@ func (c *codexClient) handleItemNotification(method string, params map[string]an
 		delta, _ := params["delta"].(string)
 		c.handleAgentMessageDelta(itemID, delta)
 
+	case (method == "item/started" || method == "item/completed") && (itemType == "webSearch" || itemType == "imageView"):
+		if c.onMessage != nil {
+			msg := Message{Type: MessageToolResult, Tool: "web_search", CallID: itemID}
+			if itemType == "imageView" {
+				msg.Tool = "view_image"
+			}
+			if method == "item/started" {
+				msg.Type = MessageToolUse
+				if itemType == "imageView" {
+					path, _ := item["path"].(string)
+					msg.Input = map[string]any{"path": path}
+				} else {
+					query, _ := item["query"].(string)
+					msg.Input = map[string]any{"query": query}
+					if action, ok := item["action"].(map[string]any); ok {
+						msg.Input["action"] = action
+					}
+				}
+				msg.Input = redact.InputMap(msg.Input)
+			}
+			// These items carry request metadata only, without result content or
+			// a success status. Completion closes the call without inventing either.
+			c.onMessage(msg)
+		}
+
 	case method == "item/started" && itemType == "commandExecution":
 		command, _ := item["command"].(string)
 		if c.onMessage != nil {
