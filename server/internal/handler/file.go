@@ -82,15 +82,14 @@ type AttachmentResponse struct {
 	// SHOULD persist into markdown bodies (issue descriptions, comments,
 	// chat messages). It is computed per deployment policy by
 	// buildMarkdownURL — preferring the storage URL when it is already a
-	// public, durable absolute URL (public CDN / LocalStorage with
-	// MULTICA_LOCAL_UPLOAD_BASE_URL), and otherwise prefixing
+	// public, durable absolute URL (a public CDN), and otherwise prefixing
 	// MULTICA_PUBLIC_URL onto the stable per-attachment endpoint that the
 	// server self-resigns / proxies on every request.
 	//
 	// Why a separate field from URL / DownloadURL:
-	//   - URL is the raw storage object URL — fine for avatar/logo
-	//     surfaces but may be private (S3 + CloudFront-signed mode) or
-	//     site-relative (LocalStorage with no base URL configured).
+	//   - URL is the raw storage object reference retained for compatibility;
+	//     it may be private (S3 + CloudFront-signed mode) or intentionally
+	//     unreachable directly (LocalStorage).
 	//   - DownloadURL is the URL the renderer uses for THIS response — it
 	//     can be a short-lived signed URL (CloudFront, S3 presign) and
 	//     therefore must NOT be persisted. It expires.
@@ -206,9 +205,8 @@ func (h *Handler) attachmentToResponse(a db.Attachment, mode attachmentURLMode) 
 //
 //  1. Persist `a.Url` only when the deployment has signaled the storage
 //     backend serves URLs publicly without per-request auth:
-//     - `Storage.CdnDomain()` is non-empty (operator configured a
-//     public-facing base URL — `S3_CDN_DOMAIN` for the S3 backend or
-//     `LOCAL_UPLOAD_BASE_URL` for LocalStorage), AND
+//     - `Storage.CdnDomain()` is non-empty (the operator configured a
+//     public-facing `S3_CDN_DOMAIN`), AND
 //     - `h.CFSigner` is nil (no per-request CloudFront signing — when
 //     signing is on, the same CDN domain serves PRIVATE content via
 //     time-bounded signed URLs and the raw `a.Url` is unauth-deny),
@@ -220,7 +218,7 @@ func (h *Handler) attachmentToResponse(a db.Attachment, mode attachmentURLMode) 
 //
 //  2. Every other shape — CloudFront-signed mode, S3 presign /proxy
 //     against a private bucket without a CDN domain, raw S3 / R2 /
-//     MinIO, LocalStorage with no `LOCAL_UPLOAD_BASE_URL` — uses the
+//     MinIO, and LocalStorage — uses the
 //     stable per-attachment endpoint that the server self-signs /
 //     proxies on every request, anchored on `MULTICA_PUBLIC_URL` so the
 //     persisted URL keeps working for clients that don't share the
@@ -798,10 +796,9 @@ func (h *Handler) loadAttachmentForRequest(w http.ResponseWriter, r *http.Reques
 // workspace. This helper keeps the URL clean (`/api/attachments/{id}/download`)
 // and treats the attachment id + cookie/Bearer auth as sufficient.
 //
-// Membership uses the same 404-on-deny shape as ServeLocalUpload so the
-// route does not act as an IDOR oracle for attachment IDs that happen to
-// belong to a different workspace. The membership cache fast path mirrors
-// canReadWorkspaceUpload exactly.
+// Membership uses a 404-on-deny shape so the route does not act as an IDOR
+// oracle for attachment IDs that happen to belong to a different workspace.
+// The membership cache fast path mirrors other workspace membership loaders.
 func (h *Handler) loadAttachmentForDownload(w http.ResponseWriter, r *http.Request) (db.Attachment, bool) {
 	attachmentID := chi.URLParam(r, "id")
 	attUUID, ok := parseUUIDOrBadRequest(w, attachmentID, "attachment id")
@@ -811,8 +808,7 @@ func (h *Handler) loadAttachmentForDownload(w http.ResponseWriter, r *http.Reque
 	att, err := h.Queries.GetAttachmentByIDOnly(r.Context(), attUUID)
 	if err != nil {
 		// 404 (not 403/401) so non-member and non-existent look identical
-		// to outside callers. Same shape as ServeLocalUpload's
-		// canReadWorkspaceUpload deny path.
+		// to outside callers.
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return db.Attachment{}, false
 	}
@@ -956,24 +952,6 @@ func shouldProxyAttachmentURL(rawURL string) bool {
 			addr.IsUnspecified()
 	}
 	return false
-}
-
-// ServeLocalUpload serves a local-disk object from the public /uploads/*
-// route. It carries the same preview security headers as the authenticated
-// download endpoint so self-hosted deployments — same-origin or split
-// frontend/backend origins — can inline-render images and iframe-preview
-// documents (PDF/HTML) fetched straight from the static route. Without these
-// headers the global "frame-ancestors 'none'" policy blocks those previews.
-// See MUL-3821 / #4477.
-func (h *Handler) ServeLocalUpload(w http.ResponseWriter, r *http.Request) {
-	local, ok := h.Storage.(*storage.LocalStorage)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	h.setAttachmentPreviewSecurityHeaders(w)
-	key := strings.TrimPrefix(r.URL.Path, "/uploads/")
-	local.ServeFile(w, r, key)
 }
 
 // proxyAttachmentDownload streams an attachment through the API instead of

@@ -217,11 +217,23 @@ func TestLocalStorage_KeyFromURL_Empty(t *testing.T) {
 	}
 }
 
-// TestLocalStorage_ServeFile_ContentDispositionFromSidecar verifies the fix
-// for issue #2442: downloads served from /uploads/* must carry the original
-// uploaded filename in Content-Disposition, mirroring the S3 Upload path's
-// existing ContentDisposition behavior. Without this, browsers fall back to
-// the storage-key basename (UUID + ext) for the download filename.
+func TestLocalStorage_CdnDomainIsEmpty(t *testing.T) {
+	t.Setenv("LOCAL_UPLOAD_DIR", t.TempDir())
+	t.Setenv("LOCAL_UPLOAD_BASE_URL", "https://api.example.test")
+
+	store := NewLocalStorageFromEnv()
+	if store == nil {
+		t.Fatal("NewLocalStorageFromEnv returned nil")
+	}
+	if got := store.CdnDomain(); got != "" {
+		t.Fatalf("CdnDomain = %q, want empty because local objects require API authorization", got)
+	}
+}
+
+// TestLocalStorage_ServeFile_ContentDispositionFromSidecar verifies that a
+// trusted caller receives the original uploaded filename, mirroring the S3
+// Upload path's existing ContentDisposition behavior. Without this, browsers
+// fall back to the storage-key basename (UUID + ext) for the download filename.
 func TestLocalStorage_ServeFile_ContentDispositionFromSidecar(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("LOCAL_UPLOAD_DIR", tmpDir)
@@ -315,11 +327,10 @@ func TestLocalStorage_ServeFile_NoSidecarFallback(t *testing.T) {
 	}
 }
 
-// TestLocalStorage_ServeFile_RejectsSidecarSuffix verifies that the sidecar
-// JSON itself is not addressable via /uploads/*. The sidecar is an
-// implementation detail; exposing it would turn the filename + content-type
-// pair into a stable read API and make any future ACL change leakier than
-// the data file it sits next to.
+// TestLocalStorage_ServeFile_RejectsSidecarSuffix verifies that ServeFile
+// refuses the sidecar JSON. The sidecar is an implementation detail; exposing
+// it would turn the filename + content-type pair into a stable read API and
+// make any future ACL change leakier than the data file it sits next to.
 func TestLocalStorage_ServeFile_RejectsSidecarSuffix(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("LOCAL_UPLOAD_DIR", tmpDir)

@@ -313,7 +313,7 @@ describe("Attachment — image dispatch", () => {
     );
   });
 
-  it("prefers a local disk /uploads URL over API markdown in split-origin self-host", () => {
+  it("prefers authorized API markdown over a raw local upload path", () => {
     getBaseUrlMock.mockReturnValue("https://api.example.test");
     const id = "11111111-2222-3333-4444-555555555555";
     const markdownUrl = `https://api.example.test/api/attachments/${id}/download`;
@@ -337,14 +337,8 @@ describe("Attachment — image dispatch", () => {
       />,
     );
 
-    expect(document.querySelector("img")?.getAttribute("src")).toBe(mediaUrl);
-
-    fireEvent.click(screen.getByRole("button", { name: "View" }));
-
-    const imageSrcs = [...document.querySelectorAll("img")].map((img) =>
-      img.getAttribute("src"),
-    );
-    expect(imageSrcs).toEqual([mediaUrl, mediaUrl]);
+    expect(document.querySelector("img")?.getAttribute("src")).toBe(markdownUrl);
+    expect(document.querySelector("img")?.getAttribute("src")).not.toBe(mediaUrl);
   });
 
   it("opens preview with the same resolved media URL when a reopened draft record has no download_url", () => {
