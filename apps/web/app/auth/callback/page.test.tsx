@@ -118,6 +118,8 @@ function renderCallback(locale: SupportedLocale = "en") {
 }
 
 describe("CallbackPage", () => {
+  const desktopState = "s".repeat(43);
+
   beforeEach(() => {
     vi.clearAllMocks();
     // Reset the source-backfill dismiss counter so a test that writes
@@ -239,7 +241,7 @@ describe("CallbackPage", () => {
   });
 
   it.each([
-    ["Desktop", "platform:desktop"],
+    ["Desktop", `platform:desktop,desktop_state:${desktopState}`],
     ["CLI", "cli_callback:http://127.0.0.1:46233/callback,cli_state:test"],
   ])("uses the same localized error handling for the %s callback", async (_flow, state) => {
     const { api: mockedApi } = await import("@multica/core/api");
@@ -254,6 +256,57 @@ describe("CallbackPage", () => {
     expect(mockedApi.googleLogin).toHaveBeenCalledTimes(1);
     expect(mockLoginWithGoogle).not.toHaveBeenCalled();
     expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it("returns Google tokens with the desktop transaction state", async () => {
+    const { api: mockedApi } = await import("@multica/core/api");
+    const mockGoogleLogin = mockedApi.googleLogin as ReturnType<typeof vi.fn>;
+    const hrefSetter = vi.fn();
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: {
+        ...originalLocation,
+        set href(value: string) {
+          hrefSetter(value);
+        },
+      },
+    });
+
+    try {
+      mockSearchParams.set(
+        "state",
+        `platform:desktop,desktop_state:${desktopState}`,
+      );
+      mockGoogleLogin.mockResolvedValue({ token: "desktop-jwt" });
+
+      renderCallback();
+
+      await waitFor(() => {
+        expect(hrefSetter).toHaveBeenCalledWith(
+          `multica://auth/callback?token=desktop-jwt&state=${desktopState}`,
+        );
+      });
+      expect(mockLoginWithGoogle).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: originalLocation,
+      });
+    }
+  });
+
+  it("ignores a desktop platform marker without transaction state", async () => {
+    const { api: mockedApi } = await import("@multica/core/api");
+    mockSearchParams.set("state", "platform:desktop");
+
+    renderCallback();
+
+    await waitFor(() => {
+      expect(mockLoginWithGoogle).toHaveBeenCalledTimes(1);
+    });
+    expect(mockedApi.googleLogin).not.toHaveBeenCalled();
   });
 
   it("unonboarded user honors a safe next= (e.g. /invite/{id}) so invitees aren't trapped", async () => {
@@ -430,7 +483,7 @@ describe("CallbackPage", () => {
     try {
       mockSearchParams.set(
         "state",
-        "platform:desktop,cli_callback:http://localhost:12345/callback,cli_state:mystate",
+        `platform:desktop,desktop_state:${desktopState},cli_callback:http://localhost:12345/callback,cli_state:mystate`,
       );
       mockGoogleLogin.mockResolvedValue({ token: "mixed-jwt" });
 

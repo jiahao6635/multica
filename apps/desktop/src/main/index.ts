@@ -67,6 +67,7 @@ import {
   NotificationGate,
   parseNativeNotificationPayload,
 } from "./notification-gate";
+import { DesktopAuthFlow } from "./desktop-auth-flow";
 
 configureLinuxFileDialogs(app.commandLine);
 
@@ -148,6 +149,7 @@ const authSessionCoordinator = new AuthSessionCoordinator<BrowserWindow>(
 );
 const notificationGate = new NotificationGate();
 const mainRendererMessages = new MainRendererMessageQueue();
+const desktopAuthFlow = new DesktopAuthFlow();
 let desktopInitialized = false;
 let authSessionGeneration = 0;
 const rendererRouteContexts = new WeakMap<
@@ -197,9 +199,11 @@ function handleDeepLink(url: string): void {
     const parsed = new URL(url);
     if (parsed.protocol !== `${PROTOCOL}:`) return;
 
-    // multica://auth/callback?token=<jwt>
+    // Authentication callbacks are accepted only when they consume a pending,
+    // main-process login transaction. Cold-start, mismatched, expired, and
+    // replayed callbacks never cross the main-to-renderer trust boundary.
     if (parsed.hostname === "auth" && parsed.pathname === "/callback") {
-      const token = parsed.searchParams.get("token");
+      const token = desktopAuthFlow.consumeCallback(parsed);
       if (token) dispatchToMainRenderer("auth:token", token);
       return;
     }
@@ -660,7 +664,24 @@ if (!gotTheLock) {
       optimizer.watchWindowShortcuts(window);
     });
 
-    // IPC: open URL in default browser (used by renderer for Google login).
+    // Main owns desktop login state so a custom-protocol callback cannot
+    // authenticate unless a tracked app window explicitly initiated it.
+    ipcMain.handle("auth:start-login", (event) => {
+      const sourceWindow = BrowserWindow.fromWebContents(event.sender);
+      if (
+        !sourceWindow ||
+        sourceWindow.isDestroyed() ||
+        (sourceWindow !== mainWindow && !issueWindows.has(sourceWindow)) ||
+        !runtimeConfigResult.ok
+      ) {
+        return;
+      }
+      return openExternalSafely(
+        desktopAuthFlow.beginLogin(runtimeConfigResult.config.appUrl),
+      );
+    });
+
+    // IPC: open URL in default browser.
     // All scheme-allowlist enforcement lives in openExternalSafely — this
     // is the single audit point for renderer-controlled URLs reaching the
     // OS shell under the app's intentional webSecurity: false configuration

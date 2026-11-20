@@ -26,6 +26,10 @@ import {
 import { Button } from "@multica/ui/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { setLoggedInCookie } from "@/features/auth/auth-cookie";
+import {
+  createDesktopAuthCallbackUrl,
+  parseDesktopAuthState,
+} from "@/features/auth/desktop-handoff";
 import Link from "next/link";
 import { LoginPage, validateCliCallback } from "@multica/views/auth";
 import { useT } from "@multica/views/i18n";
@@ -68,7 +72,12 @@ function LoginPageContent() {
   const cliCallbackRaw = searchParams.get("cli_callback");
   const cliState = searchParams.get("cli_state") || "";
   const platform = searchParams.get("platform");
-  const isDesktopHandoff = platform === "desktop" && !cliCallbackRaw;
+  const desktopState = parseDesktopAuthState(
+    searchParams.get("desktop_state"),
+  );
+  const hasDesktopTransaction =
+    platform === "desktop" && desktopState !== null;
+  const isDesktopHandoff = hasDesktopTransaction && !cliCallbackRaw;
   // `next` carries a protected URL the user was originally headed to
   // (e.g. /invite/{id}). With URL-driven workspaces there is no legacy
   // "/issues" default — if `next` is absent we decide after login based on
@@ -95,7 +104,7 @@ function LoginPageContent() {
       return;
     }
     if (cliCallbackRaw) return;
-    if (isDesktopHandoff) {
+    if (isDesktopHandoff && desktopState) {
       // Desktop opened the browser for login but the web session is already
       // authenticated — mint a bearer token from the cookie session and hand
       // it off via deep link instead of silently redirecting to the workspace.
@@ -103,7 +112,10 @@ function LoginPageContent() {
         .issueCliToken()
         .then(({ token }) => {
           setDesktopToken(token);
-          window.location.href = `multica://auth/callback?token=${encodeURIComponent(token)}`;
+          window.location.href = createDesktopAuthCallbackUrl(
+            token,
+            desktopState,
+          );
         })
         .catch((err) => {
           setDesktopError(
@@ -134,7 +146,17 @@ function LoginPageContent() {
       .catch(() => [] as Workspace[])
       .then((list) => resolveLoggedInDestination(qc, hasOnboarded, list))
       .then((dest) => router.replace(dest));
-  }, [isLoading, user, router, nextUrl, cliCallbackRaw, isDesktopHandoff, hasOnboarded, qc]);
+  }, [
+    isLoading,
+    user,
+    router,
+    nextUrl,
+    cliCallbackRaw,
+    isDesktopHandoff,
+    desktopState,
+    hasOnboarded,
+    qc,
+  ]);
 
   const handleSuccess = async () => {
     // Read the latest user snapshot directly — the closure's `hasOnboarded`
@@ -155,7 +177,8 @@ function LoginPageContent() {
   // post-login callback page can redirect the JWT back to the CLI's local
   // HTTP listener (critical for headless / WSL2 environments).
   const googleState = [
-    platform === "desktop" ? "platform:desktop" : "",
+    hasDesktopTransaction ? "platform:desktop" : "",
+    hasDesktopTransaction ? `desktop_state:${desktopState}` : "",
     nextUrl ? `next:${nextUrl}` : "",
     cliCallbackRaw && validateCliCallback(cliCallbackRaw)
       ? `cli_callback:${encodeURIComponent(cliCallbackRaw)}`
@@ -201,7 +224,11 @@ function LoginPageContent() {
               <Button
                 variant="outline"
                 onClick={() => {
-                  window.location.href = `multica://auth/callback?token=${encodeURIComponent(desktopToken)}`;
+                  if (!desktopState) return;
+                  window.location.href = createDesktopAuthCallbackUrl(
+                    desktopToken,
+                    desktopState,
+                  );
                 }}
               >
                 {t(($) => $.web.desktop_handoff.open_button)}
