@@ -225,25 +225,29 @@ func TestCreateWorkspaceMcpServer_RejectsDuplicateName(t *testing.T) {
 	}
 }
 
-// Curating the library stays a human admin action: a task token running under
-// an owner's PAT must not be able to add a shared server.
-func TestCreateWorkspaceMcpServer_DeniesAgentActor(t *testing.T) {
+// Curating the library stays a human admin action: neither machine credential
+// may use its owner's membership to add a shared server.
+func TestCreateWorkspaceMcpServer_DeniesMachineActors(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	caller := createHandlerTestAgent(t, "ws-mcp-lib-writer", nil)
 	taskID := insertHandlerTestTask(t, caller)
 
-	code, _, raw := createWorkspaceMcpServerViaAPI(t, map[string]any{
-		"name":   "linear",
-		"config": map[string]any{"url": "https://mcp.example"},
-	}, func(req *http.Request) {
-		req.Header.Set("X-Actor-Source", "task_token")
-		req.Header.Set("X-Agent-ID", caller)
-		req.Header.Set("X-Task-ID", taskID)
-	})
-	if code != http.StatusForbidden {
-		t.Fatalf("expected 403 for an agent actor, got %d: %s", code, raw)
+	for _, actorSource := range []string{"task_token", "cloud_pat"} {
+		t.Run(actorSource, func(t *testing.T) {
+			code, _, raw := createWorkspaceMcpServerViaAPI(t, map[string]any{
+				"name":   "linear",
+				"config": map[string]any{"url": "https://mcp.example"},
+			}, func(req *http.Request) {
+				req.Header.Set("X-Actor-Source", actorSource)
+				req.Header.Set("X-Agent-ID", caller)
+				req.Header.Set("X-Task-ID", taskID)
+			})
+			if code != http.StatusForbidden {
+				t.Fatalf("expected 403 for %s, got %d: %s", actorSource, code, raw)
+			}
+		})
 	}
 }
 

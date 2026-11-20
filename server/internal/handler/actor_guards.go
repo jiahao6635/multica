@@ -14,12 +14,22 @@ import (
 // when adding them; unknown values currently remain human-equivalent.
 func RequireHumanActor(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isMachineCredentialActor(r) {
-			writeError(w, http.StatusForbidden, "this endpoint is only available to human actors")
+		if !requireHumanActor(w, r) {
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// requireHumanActor is the handler-level form of RequireHumanActor. Sensitive
+// sinks use it as a backstop so a future router refactor cannot silently drop
+// the machine-credential boundary.
+func requireHumanActor(w http.ResponseWriter, r *http.Request) bool {
+	if isMachineCredentialActor(r) {
+		writeError(w, http.StatusForbidden, "this endpoint is only available to human actors")
+		return false
+	}
+	return true
 }
 
 // isMachineCredentialActor centralizes the authoritative actor-source check so

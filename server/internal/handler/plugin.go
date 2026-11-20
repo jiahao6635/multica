@@ -239,6 +239,9 @@ type installPluginRequest struct {
 
 // InstallPlugin — POST /api/workspaces/{id}/plugins
 func (h *Handler) InstallPlugin(w http.ResponseWriter, r *http.Request) {
+	if !requireHumanActor(w, r) {
+		return
+	}
 	if !h.requirePluginsV1(w, r) {
 		return
 	}
@@ -339,6 +342,9 @@ func (h *Handler) UninstallPlugin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) pluginInstallationFromURL(w http.ResponseWriter, r *http.Request) (db.PluginInstallation, bool) {
+	if !requireHumanActor(w, r) {
+		return db.PluginInstallation{}, false
+	}
 	if !h.requirePluginsV1(w, r) {
 		return db.PluginInstallation{}, false
 	}
