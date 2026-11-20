@@ -299,16 +299,13 @@ func (h *Handler) ownedStorageKey(rawURL string) string {
 	return key
 }
 
-// avatarObjectLoadsUnauthenticated reports whether the raw storage URL is
-// already loadable by an unauthenticated browser fetch, in which case
-// rewriting it would only add a pointless hop through the API.
+// avatarObjectLoadsUnauthenticated reports whether a public storage backend
+// already serves the raw URL without authentication, in which case rewriting
+// it would only add a pointless hop through the API.
 func (h *Handler) avatarObjectLoadsUnauthenticated(rawURL string) bool {
-	// LocalStorage objects are served by the public /uploads/* route, whether
-	// the stored URL is site-relative or absolute via LOCAL_UPLOAD_BASE_URL.
-	if _, ok := h.Storage.(*storage.LocalStorage); ok {
-		return true
-	}
-	// Otherwise: a public CDN domain with no per-request CloudFront signing.
+	// A public CDN domain with no per-request CloudFront signing is directly
+	// readable. LocalStorage reports no CDN domain because its objects are only
+	// exposed through the signed avatar endpoint.
 	// In signed-CloudFront mode the same domain serves private content and the
 	// unsigned URL is a 403, so that shape resolves through the endpoint too.
 	return h.storageURLIsPubliclyReadable(rawURL)

@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,14 +62,10 @@ func NewLocalStorageFromEnv() *LocalStorage {
 }
 
 func (s *LocalStorage) CdnDomain() string {
-	if s.baseURL == "" {
-		return ""
-	}
-	u, err := url.Parse(s.baseURL)
-	if err != nil {
-		return ""
-	}
-	return u.Hostname()
+	// Local object URLs are durable storage references, not public read URLs.
+	// Attachments and avatars are served through their authenticated or signed
+	// API routes, so clients must never treat LOCAL_UPLOAD_BASE_URL as a CDN.
+	return ""
 }
 
 func (s *LocalStorage) KeyFromURL(rawURL string) string {

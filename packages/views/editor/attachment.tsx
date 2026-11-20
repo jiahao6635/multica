@@ -210,9 +210,9 @@ function absolutizeMediaURL(rawUrl: string): string {
 // for rendering but must not replace durable Markdown references.
 //
 // Use known public/CDN URLs directly only when cdn_signed is false; unsigned URLs
-// on a private CDN fail even when the domain matches. Local /uploads paths remain
-// valid after origin normalization. Otherwise prefer the server's markdown_url,
-// then legacy storage URLs, then the original input.
+// on a private CDN fail even when the domain matches. Local /uploads paths are
+// storage references rather than public reads, so prefer the server's authorized
+// markdown_url before falling back to legacy storage URLs and the original input.
 function pickInlineMediaURL(
   record: AttachmentRecord,
   fallback: string,
@@ -227,16 +227,9 @@ function pickInlineMediaURL(
     return dl;
   }
   if (!cdnSigned && storageURLMatchesCdnDomain(record.url, cdnDomain)) return record.url;
-  if (isSiteRelativeLocalUploadURL(record.url)) return record.url;
   if (record.markdown_url) return record.markdown_url;
   if (record.url) return record.url;
   return fallback;
-}
-
-function isSiteRelativeLocalUploadURL(rawURL: string): boolean {
-  if (!rawURL || !rawURL.startsWith("/")) return false;
-  const path = rawURL.split(/[?#]/, 1)[0] ?? "";
-  return path === "/uploads" || path.startsWith("/uploads/");
 }
 
 function storageURLMatchesCdnDomain(rawURL: string, cdnDomain: string): boolean {
