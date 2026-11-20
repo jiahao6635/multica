@@ -125,12 +125,11 @@ func (h *Handler) ListWorkspaceMcpServers(w http.ResponseWriter, r *http.Request
 // owner's PAT would satisfy that gate: adding a shared MCP server has to stay a
 // human admin action.
 func (h *Handler) requireWorkspaceMcpWriter(w http.ResponseWriter, r *http.Request, workspaceID string) bool {
-	member, ok := h.workspaceMember(w, r, workspaceID)
-	if !ok {
+	if !requireHumanActor(w, r) {
 		return false
 	}
-	if actorType, _ := h.resolveActor(r, requestUserID(r), workspaceID); actorType == "agent" {
-		writeError(w, http.StatusForbidden, "agents cannot modify the workspace MCP servers")
+	member, ok := h.workspaceMember(w, r, workspaceID)
+	if !ok {
 		return false
 	}
 	if !roleAllowed(member.Role, "owner", "admin") {

@@ -1661,10 +1661,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// no workspace in the path to gate on.
 		// --- User-scoped routes (no workspace context required) ---
 		r.Get("/api/me", h.GetMe)
-		r.Patch("/api/me", h.UpdateMe)
-		r.Patch("/api/me/onboarding", h.PatchOnboarding)
-		r.Post("/api/me/onboarding/complete", h.CompleteOnboarding)
-		r.Post("/api/me/onboarding/cloud-waitlist", h.JoinCloudWaitlist)
+		r.Group(func(r chi.Router) {
+			r.Use(handler.RequireHumanActor)
+			r.Patch("/api/me", h.UpdateMe)
+			r.Patch("/api/me/onboarding", h.PatchOnboarding)
+			r.Post("/api/me/onboarding/complete", h.CompleteOnboarding)
+			r.Post("/api/me/onboarding/cloud-waitlist", h.JoinCloudWaitlist)
+		})
 		// Credential minting is human-only (MUL-8154): an agent task token
 		// (mat_) or cloud-node PAT (mcn_) authenticates as its owner, so
 		// without this guard a prompt-injected agent could trade its scoped,
@@ -1704,15 +1707,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 		r.Route("/api/workspaces", func(r chi.Router) {
 			r.Get("/", h.ListWorkspaces)
-			r.Post("/", h.CreateWorkspace)
+			r.With(handler.RequireHumanActor).Post("/", h.CreateWorkspace)
 			r.Route("/{id}", func(r chi.Router) {
 				// Member-level access
 				r.Group(func(r chi.Router) {
 					r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
 					r.Get("/", h.GetWorkspace)
-					r.Get("/members", h.ListMembersWithUser)
-					r.Post("/leave", h.LeaveWorkspace)
-					r.Get("/invitations", h.ListWorkspaceInvitations)
+					r.With(handler.RequireHumanActor).Get("/members", h.ListMembersWithUser)
+					r.With(handler.RequireHumanActor).Post("/leave", h.LeaveWorkspace)
+					r.With(handler.RequireHumanActor).Get("/invitations", h.ListWorkspaceInvitations)
 					// Listing GitHub installations is member-visible so the
 					// integrations tab no longer renders blank for non-admins;
 					// the handler strips the management handle and adds a
@@ -1745,6 +1748,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 				// Admin-level access
 				r.Group(func(r chi.Router) {
+					r.Use(handler.RequireHumanActor)
 					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
 					r.Put("/", h.UpdateWorkspace)
 					r.Patch("/", h.UpdateWorkspace)
@@ -1797,12 +1801,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/plugins/{installationId}", h.UninstallPlugin)
 				})
 				// Owner-only access
-				r.With(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner")).Delete("/", h.DeleteWorkspace)
+				r.With(handler.RequireHumanActor, middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner")).Delete("/", h.DeleteWorkspace)
 
 				// GitHub integration — connect / disconnect remain admin-only;
 				// the read-only list endpoint lives in the member-level group
 				// above so non-admins can see the workspace's connection state.
 				r.Group(func(r chi.Router) {
+					r.Use(handler.RequireHumanActor)
 					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
 					r.Get("/github/connect", h.GitHubConnect)
 					r.Get("/github/installations/{installationId}/repositories", h.ListGitHubInstallationRepositories)
@@ -1837,13 +1842,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Group(func(r chi.Router) {
 					r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
 					r.Get("/lark/installations", h.ListLarkInstallations)
-					r.Delete("/lark/installations/{installationId}", h.RevokeLarkInstallation)
+					r.With(handler.RequireHumanActor).Delete("/lark/installations/{installationId}", h.RevokeLarkInstallation)
 					// Device-flow scan-to-install. Begin opens a new
 					// registration session against Lark and returns
 					// the QR-code URL; the frontend dialog then polls
 					// /install/{sessionId}/status until success or
 					// terminal failure.
-					r.Post("/lark/install/begin", h.BeginLarkInstall)
+					r.With(handler.RequireHumanActor).Post("/lark/install/begin", h.BeginLarkInstall)
 					r.Get("/lark/install/{sessionId}/status", h.GetLarkInstallStatus)
 				})
 
@@ -1858,6 +1863,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/wecom/installations", h.ListWecomInstallations)
 				})
 				r.Group(func(r chi.Router) {
+					r.Use(handler.RequireHumanActor)
 					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
 					r.Delete("/slack/installations/{installationId}", h.RevokeSlackInstallation)
 					r.Post("/slack/install/byo", h.RegisterSlackBYO)
@@ -1869,9 +1875,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
 					r.Get("/dingtalk/installations", h.ListDingTalkInstallations)
 					r.Get("/dingtalk/groups", h.ListDingTalkGroups)
-					r.Delete("/dingtalk/installations/{installationId}/groups/{conversationId}", h.ForgetDingTalkGroup)
-					r.Delete("/dingtalk/installations/{installationId}", h.RevokeDingTalkInstallation)
-					r.Post("/dingtalk/install/byo", h.RegisterDingTalkBYO)
+					r.With(handler.RequireHumanActor).Delete("/dingtalk/installations/{installationId}/groups/{conversationId}", h.ForgetDingTalkGroup)
+					r.With(handler.RequireHumanActor).Delete("/dingtalk/installations/{installationId}", h.RevokeDingTalkInstallation)
+					r.With(handler.RequireHumanActor).Post("/dingtalk/install/byo", h.RegisterDingTalkBYO)
 				})
 
 				// Telegram integration. Same admin/member split as Slack:
@@ -1881,6 +1887,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/telegram/installations", h.ListTelegramInstallations)
 				})
 				r.Group(func(r chi.Router) {
+					r.Use(handler.RequireHumanActor)
 					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
 					r.Delete("/telegram/installations/{installationId}", h.RevokeTelegramInstallation)
 					r.Post("/telegram/install", h.RegisterTelegramBot)
@@ -1894,24 +1901,24 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// lark_user_binding row. Identity comes from the session;
 		// the token only proves "this open_id requested binding," and
 		// is combined with the logged-in user to create the mapping.
-		r.Post("/api/lark/binding/redeem", h.RedeemLarkBindingToken)
+		r.With(handler.RequireHumanActor).Post("/api/lark/binding/redeem", h.RedeemLarkBindingToken)
 		// Slack binding-token redemption. Same rationale as Lark: NOT
 		// workspace-scoped because the redeemer hits this before they have any
 		// workspace context — the redemption itself mints their binding row. The
 		// logged-in user (from the session) is bound to the Slack id the token
 		// carries.
-		r.Post("/api/slack/binding/redeem", h.RedeemSlackBindingToken)
+		r.With(handler.RequireHumanActor).Post("/api/slack/binding/redeem", h.RedeemSlackBindingToken)
 		// DingTalk binding redemption is user-scoped for the same reason as
 		// Slack: the token is redeemed before workspace context is selected.
-		r.Post("/api/dingtalk/binding/redeem", h.RedeemDingTalkBindingToken)
+		r.With(handler.RequireHumanActor).Post("/api/dingtalk/binding/redeem", h.RedeemDingTalkBindingToken)
 		// WeCom smart-bot binding-token redemption. Same rationale as
 		// Lark/Slack: the session is the source of truth for the redeemer's
 		// Multica identity; the token only carries the WeCom userid to bind.
-		r.Post("/api/wecom/binding/redeem", h.RedeemWecomBindingToken)
+		r.With(handler.RequireHumanActor).Post("/api/wecom/binding/redeem", h.RedeemWecomBindingToken)
 		// Telegram binding-token redemption. Same rationale: not
 		// workspace-scoped, identity from the session, token proves only
 		// "this Telegram user id requested binding".
-		r.Post("/api/telegram/binding/redeem", h.RedeemTelegramBindingToken)
+		r.With(handler.RequireHumanActor).Post("/api/telegram/binding/redeem", h.RedeemTelegramBindingToken)
 
 		// Composio integration (MUL-3720). User-scoped (no workspace context):
 		// a connection belongs to a user. These four require a logged-in
@@ -1919,6 +1926,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// group (registered above with the other public OAuth/webhook routes —
 		// see MUL-3843). All return 503 when COMPOSIO_API_KEY is unset.
 		r.Route("/api/integrations/composio", func(r chi.Router) {
+			r.Use(handler.RequireHumanActor)
 			r.Post("/connect/init", h.ComposioConnectInit)
 			r.Get("/toolkits", h.ListComposioToolkits)
 			r.Get("/connections", h.ListComposioConnections)
@@ -1926,11 +1934,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		})
 
 		// User-scoped invitation routes (no workspace context required)
-		r.Get("/api/invitations", h.ListMyInvitations)
-		r.Get("/api/invitations/{id}", h.GetMyInvitation)
-		r.Post("/api/invitations/{id}/accept", h.AcceptInvitation)
-		r.Post("/api/invitations/{id}/decline", h.DeclineInvitation)
-		r.Post("/api/share-links/join", h.JoinByShareLink)
+		r.With(handler.RequireHumanActor).Get("/api/invitations", h.ListMyInvitations)
+		r.With(handler.RequireHumanActor).Get("/api/invitations/{id}", h.GetMyInvitation)
+		r.With(handler.RequireHumanActor).Post("/api/invitations/{id}/accept", h.AcceptInvitation)
+		r.With(handler.RequireHumanActor).Post("/api/invitations/{id}/decline", h.DeclineInvitation)
+		r.With(handler.RequireHumanActor).Post("/api/share-links/join", h.JoinByShareLink)
 
 		// PAT management is human-only (MUL-8154): a machine credential must
 		// not mint a non-expiring PAT, enumerate the owner's PATs, or revoke

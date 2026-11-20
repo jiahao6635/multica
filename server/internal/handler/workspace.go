@@ -1093,11 +1093,14 @@ func lockWorkspaceTaskOwners(ctx context.Context, qtx *db.Queries, workspaceID p
 }
 
 func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
+	if !requireHumanActor(w, r) {
+		return
+	}
 	workspaceID := workspaceIDFromURL(r, "id")
 
 	// Defense in depth: the route is already gated by the
-	// RequireWorkspaceRoleFromURL("owner") middleware, but we re-check here
-	// so that the handler is safe regardless of how it gets wired up
+	// human-actor and RequireWorkspaceRoleFromURL("owner") middleware, but we
+	// re-check ownership here so that the handler is safe regardless of wiring
 	// (direct calls in tests, future router refactors, etc.).
 	requester, ok := h.workspaceMember(w, r, workspaceID)
 	if !ok {

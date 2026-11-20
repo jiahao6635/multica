@@ -87,15 +87,13 @@ func TestRequireHumanActor_BlocksMachineCredentials(t *testing.T) {
 }
 
 // TestRequireHumanActor_IgnoresUnknownActorSource pins the gate's
-// scope: it is an explicit denylist against the known-bad
-// "task_token" value, NOT an allowlist against "human only / empty".
+// scope: it is an explicit denylist against known machine credentials,
+// NOT an allowlist against "human only / empty".
 //
 // Why the denylist shape:
 //
-//   - The Auth middleware today sets X-Actor-Source for exactly one
-//     case: mat_ task tokens. Every other authenticated path (JWT,
-//     mul_ PAT) leaves the header empty. So "non-empty AND not
-//     task_token" is unreachable in current production.
+//   - Auth sets X-Actor-Source for mat_ task tokens and mcn_ cloud-node
+//     PATs. Human JWT and mul_ PAT paths leave the header empty.
 //
 //   - If a future actor kind is added (say a hypothetical
 //     `service_account` token), this gate's silence on the new value
@@ -126,7 +124,7 @@ func TestRequireHumanActor_IgnoresUnknownActorSource(t *testing.T) {
 	mw.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 — gate should only block exact 'task_token'", w.Code)
+		t.Fatalf("status = %d, want 200 — gate should only block known machine sources", w.Code)
 	}
 	if !called {
 		t.Fatal("inner handler must run for unknown actor sources")
@@ -157,5 +155,35 @@ func TestRequireHumanActor_AppliedViaChiRouterUse(t *testing.T) {
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", w.Code)
+	}
+}
+
+// Destructive and secret-changing handlers retain a local backstop in case a
+// future router refactor accidentally drops RequireHumanActor.
+func TestSensitiveHandlers_BackstopMachineCredentials(t *testing.T) {
+	h := &Handler{}
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{name: "delete workspace", handler: h.DeleteWorkspace},
+		{name: "configure plugin", handler: h.ConfigurePlugin},
+		{name: "rotate plugin token", handler: h.RotatePluginToken},
+	}
+
+	for _, source := range []string{"task_token", "cloud_pat"} {
+		for _, tt := range tests {
+			t.Run(source+"/"+tt.name, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, "/sensitive", nil)
+				req.Header.Set("X-Actor-Source", source)
+				w := httptest.NewRecorder()
+
+				tt.handler(w, req)
+
+				if w.Code != http.StatusForbidden {
+					t.Fatalf("status = %d, want 403", w.Code)
+				}
+			})
+		}
 	}
 }
