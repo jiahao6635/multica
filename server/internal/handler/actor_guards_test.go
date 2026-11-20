@@ -159,3 +159,51 @@ func TestRequireHumanActor_AppliedViaChiRouterUse(t *testing.T) {
 		t.Fatalf("status = %d, want 403", w.Code)
 	}
 }
+
+func TestTaskTokenMatchesWorkspace(t *testing.T) {
+	const (
+		workspaceA = "00000000-0000-4000-8000-00000000000a"
+		workspaceB = "00000000-0000-4000-8000-00000000000b"
+	)
+	tests := []struct {
+		name            string
+		actorSource     string
+		boundWorkspace  string
+		targetWorkspace string
+		want            bool
+	}{
+		{name: "human session may use object workspace", boundWorkspace: workspaceA, targetWorkspace: workspaceB, want: true},
+		{name: "task token may use bound workspace", actorSource: "task_token", boundWorkspace: workspaceA, targetWorkspace: workspaceA, want: true},
+		{name: "task token accepts equivalent UUID casing", actorSource: "task_token", boundWorkspace: workspaceA, targetWorkspace: "00000000-0000-4000-8000-00000000000A", want: true},
+		{name: "task token cannot use sibling workspace", actorSource: "task_token", boundWorkspace: workspaceA, targetWorkspace: workspaceB, want: false},
+		{name: "task token without binding fails closed", actorSource: "task_token", targetWorkspace: workspaceA, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/resource", nil)
+			req.Header.Set("X-Actor-Source", tt.actorSource)
+			req.Header.Set("X-Workspace-ID", tt.boundWorkspace)
+			if got := taskTokenMatchesWorkspace(req, tt.targetWorkspace); got != tt.want {
+				t.Fatalf("taskTokenMatchesWorkspace() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRequireWorkspaceMemberRejectsMismatchedTaskTokenBeforeMembership(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/runtimes/runtime-b", nil)
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-Workspace-ID", "00000000-0000-4000-8000-00000000000a")
+	req.Header.Set("X-User-ID", "00000000-0000-4000-8000-000000000001")
+	w := httptest.NewRecorder()
+
+	// A nil Handler is intentional: the workspace mismatch must be rejected
+	// before any membership lookup can reauthorize the token owner's user in B.
+	if _, ok := (&Handler{}).requireWorkspaceMember(w, req, "00000000-0000-4000-8000-00000000000b", "runtime not found"); ok {
+		t.Fatal("mismatched task token unexpectedly passed workspace authorization")
+	}
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}

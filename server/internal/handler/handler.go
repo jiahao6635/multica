@@ -1007,6 +1007,10 @@ func (h *Handler) requireWorkspaceMember(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadRequest, "workspace_id is required")
 		return db.Member{}, false
 	}
+	if !taskTokenMatchesWorkspace(r, workspaceID) {
+		writeError(w, http.StatusNotFound, notFoundMsg)
+		return db.Member{}, false
+	}
 
 	userID, ok := requireUserID(w, r)
 	if !ok {

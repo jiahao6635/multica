@@ -119,9 +119,14 @@ func (h *Handler) pluginCaller(w http.ResponseWriter, r *http.Request, scope str
 	return h.pluginSessionCaller(w, r, scope)
 }
 
-// pluginSessionCaller is the surface path, unchanged: a real signed-in user
-// whose own permissions bound everything the plugin can reach.
+// pluginSessionCaller is the surface path: a real signed-in human whose own
+// permissions bound everything the plugin can reach. Machine credentials can
+// authenticate as their owner, but they are not interactive browser sessions.
 func (h *Handler) pluginSessionCaller(w http.ResponseWriter, r *http.Request, scope string) (service.PluginActionCaller, pluginActor, bool) {
+	if isMachineCredentialActor(r) {
+		publicapiv1.WriteProblem(w, r, http.StatusForbidden, "human_actor_required", "browser Plugin actions require a human session")
+		return service.PluginActionCaller{}, pluginActor{}, false
+	}
 	userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
 	if userID == "" {
 		publicapiv1.WriteProblem(w, r, http.StatusUnauthorized, "unauthorized", "missing authenticated user")

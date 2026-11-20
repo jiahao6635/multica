@@ -100,6 +100,31 @@ func TestPluginActionRequiresTheFeatureFlag(t *testing.T) {
 	}
 }
 
+func TestPluginSessionCallerRejectsMachineCredentials(t *testing.T) {
+	for _, source := range []string{"task_token", "cloud_pat"} {
+		t.Run(source, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/plugin-bridge/v1/context", nil)
+			req.Header.Set("X-Actor-Source", source)
+			req.Header.Set("X-User-ID", "00000000-0000-4000-8000-000000000001")
+			w := httptest.NewRecorder()
+
+			if _, _, ok := (&Handler{}).pluginSessionCaller(w, req, ""); ok {
+				t.Fatal("machine credential unexpectedly became a browser Plugin session")
+			}
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", w.Code)
+			}
+			var problem publicapiv1.Problem
+			if err := json.Unmarshal(w.Body.Bytes(), &problem); err != nil {
+				t.Fatalf("decode problem: %v", err)
+			}
+			if problem.Code != "human_actor_required" {
+				t.Fatalf("problem code = %q, want human_actor_required", problem.Code)
+			}
+		})
+	}
+}
+
 func TestPluginInstallTokenRunsIssueCommentWorkflow(t *testing.T) {
 	installationID := installPluginForAction(t, []string{"issues:read", "issues:write", "comments:read", "comments:write"})
 	token, err := testHandler.PluginService.IssueInstallToken(context.Background(), parseUUID(installationID))
