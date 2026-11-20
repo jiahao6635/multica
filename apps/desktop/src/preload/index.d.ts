@@ -43,6 +43,8 @@ interface DesktopAPI {
   reportAuthSession: (userId: string | null) => void;
   /** Listen for auth token delivered via deep link. Returns an unsubscribe function. */
   onAuthToken: (callback: (token: string) => void) => () => void;
+  /** Begin a main-process-bound desktop login in the default browser. */
+  startAuthLogin: () => Promise<void>;
   /** Listen for invitation IDs delivered via deep link. Returns an unsubscribe function. */
   onInviteOpen: (callback: (invitationId: string) => void) => () => void;
   /** Open a URL in the default browser. */

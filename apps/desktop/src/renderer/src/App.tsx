@@ -141,7 +141,8 @@ function AppContent() {
     });
   }, []);
 
-  // Listen for auth token delivered via deep link (multica://auth/callback?token=...).
+  // Listen for the auth token from a state-bound deep-link callback. Main
+  // rejects callbacks that do not match a pending desktop login transaction.
   // daemonAPI.syncToken is handled separately by the [user] effect below, which
   // fires whenever a user logs in (deep link, session restore, account switch).
   useEffect(() => {

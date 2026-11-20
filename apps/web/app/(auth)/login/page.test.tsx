@@ -90,6 +90,8 @@ vi.mock("@multica/core/api", () => ({
 import LoginPage from "./page";
 
 describe("LoginPage", () => {
+  const desktopState = "s".repeat(43);
+
   beforeEach(() => {
     vi.clearAllMocks();
     searchParamsState.params = new URLSearchParams();
@@ -107,8 +109,11 @@ describe("LoginPage", () => {
   // and the Desktop app redirects them to /login?platform=desktop, the web
   // must exchange the cookie session for a bearer token and hand it off via
   // the multica:// deep link, not silently redirect to the workspace page.
-  it("mints a token and deep-links to Desktop when already logged in with platform=desktop", async () => {
-    searchParamsState.params = new URLSearchParams({ platform: "desktop" });
+  it("mints a token and returns the transaction state to Desktop", async () => {
+    searchParamsState.params = new URLSearchParams({
+      platform: "desktop",
+      desktop_state: desktopState,
+    });
     authStateRef.state.user = { id: "u1", email: "test@multica.ai" };
     mockIssueCliToken.mockImplementation(() =>
       Promise.resolve({ token: "handoff-jwt" }),
@@ -129,7 +134,7 @@ describe("LoginPage", () => {
       });
       await waitFor(() => {
         expect(hrefSetter).toHaveBeenCalledWith(
-          "multica://auth/callback?token=handoff-jwt",
+          `multica://auth/callback?token=handoff-jwt&state=${desktopState}`,
         );
       });
       expect(
@@ -141,6 +146,22 @@ describe("LoginPage", () => {
         value: originalLocation,
       });
     }
+  });
+
+  it("does not mint a desktop token without a transaction state", async () => {
+    searchParamsState.params = new URLSearchParams({ platform: "desktop" });
+    authStateRef.state.user = {
+      id: "u1",
+      email: "test@multica.ai",
+      onboarded_at: "2026-01-01T00:00:00Z",
+    };
+
+    render(<LoginPage />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith("/workspaces/new");
+    });
+    expect(mockIssueCliToken).not.toHaveBeenCalled();
   });
 
   // Regression: #5009 — the "already authenticated on arrival" effect used to
