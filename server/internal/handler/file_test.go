@@ -803,6 +803,14 @@ func TestGetAttachmentForDownload_UsesAttachmentWorkspaceMembership(t *testing.T
 	if resp.ID != id || !strings.Contains(resp.AttachmentDownloadURL, "/signed-download?") {
 		t.Fatalf("response missing attachment-specific signed URL: %+v", resp)
 	}
+
+	// The same user belongs to both workspaces, but a task token bound to A
+	// cannot use the globally addressed attachment to switch into B. This runs
+	// after the human request populated the membership cache, proving the token
+	// workspace check remains authoritative over that fast path.
+	taskRequest := request()
+	taskRequest.Header.Set("X-Actor-Source", "task_token")
+	testutil.Call(t, testHandler.GetAttachmentForDownload, taskRequest).Want(http.StatusNotFound)
 }
 
 // TestGetAttachmentByID_CloudFrontModeSignsForcedAttachmentDownloadURL pins the

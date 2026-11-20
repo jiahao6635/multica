@@ -2,6 +2,8 @@ package handler
 
 import (
 	"net/http"
+
+	"github.com/multica-ai/multica/server/internal/util"
 )
 
 // RequireHumanActor rejects machine credentials on human-only route groups.
@@ -36,4 +38,24 @@ func isMachineCredentialActor(r *http.Request) bool {
 	default:
 		return false
 	}
+}
+
+// taskTokenMatchesWorkspace enforces the workspace carried by a task token
+// when a handler derives its target workspace from a globally addressed
+// resource. Auth replaces X-Workspace-ID with the token row's workspace and
+// stamps X-Actor-Source, so both values are authoritative at this boundary.
+// Human sessions and PATs keep their existing object-derived behavior.
+func taskTokenMatchesWorkspace(r *http.Request, workspaceID string) bool {
+	if r.Header.Get("X-Actor-Source") != "task_token" {
+		return true
+	}
+	bound, err := util.ParseUUID(r.Header.Get("X-Workspace-ID"))
+	if err != nil {
+		return false
+	}
+	target, err := util.ParseUUID(workspaceID)
+	if err != nil {
+		return false
+	}
+	return bound == target
 }

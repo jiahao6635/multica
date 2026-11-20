@@ -827,6 +827,10 @@ func (h *Handler) loadAttachmentForDownload(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return db.Attachment{}, false
 	}
+	if !taskTokenMatchesWorkspace(r, workspaceID) {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return db.Attachment{}, false
+	}
 	if h.MembershipCache.Get(r.Context(), userID, workspaceID) {
 		return att, true
 	}
