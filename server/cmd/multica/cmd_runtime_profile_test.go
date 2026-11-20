@@ -64,6 +64,7 @@ func newProfileSetPathTestCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "set-path"}
 	addCommonProfileFlags(cmd)
 	cmd.Flags().String("path", "", "")
+	cmd.Flags().String("approve-args-sha256", "", "")
 	return cmd
 }
 
@@ -71,6 +72,25 @@ func newProfileUnsetPathTestCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "unset-path"}
 	addCommonProfileFlags(cmd)
 	return cmd
+}
+
+func stubRuntimeProfileApprovalAPI(t *testing.T, profileID string, fixedArgs []string) {
+	t.Helper()
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-123")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/workspaces/ws-123/runtime-profiles/"+profileID {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":         profileID,
+			"fixed_args": fixedArgs,
+		})
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
 }
 
 func TestRunRuntimeProfileList(t *testing.T) {
@@ -276,10 +296,13 @@ func TestRunRuntimeProfileDeleteConflictSurfacesServerMessage(t *testing.T) {
 
 func TestRunRuntimeProfileSetAndUnsetPath(t *testing.T) {
 	redirectTestHome(t, t.TempDir())
+	fixedArgs := []string{"start", "tenant-1"}
+	stubRuntimeProfileApprovalAPI(t, "prof-1", fixedArgs)
 
 	// set-path
 	setCmd := newProfileSetPathTestCmd()
 	_ = setCmd.Flags().Set("path", "/opt/bin/company-codex")
+	_ = setCmd.Flags().Set("approve-args-sha256", cli.RuntimeProfileFixedArgsSHA256(fixedArgs))
 	if err := runRuntimeProfileSetPath(setCmd, []string{"prof-1"}); err != nil {
 		t.Fatalf("runRuntimeProfileSetPath: %v", err)
 	}
@@ -288,8 +311,9 @@ func TestRunRuntimeProfileSetAndUnsetPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCLIConfig: %v", err)
 	}
-	if got := cfg.ProfileCommandOverrides["prof-1"]; got != "/opt/bin/company-codex" {
-		t.Fatalf("override after set = %q, want /opt/bin/company-codex", got)
+	approval := cfg.RuntimeProfileApprovals["prof-1"]
+	if approval.Path != "/opt/bin/company-codex" || approval.FixedArgsSHA256 != cli.RuntimeProfileFixedArgsSHA256(fixedArgs) {
+		t.Fatalf("approval after set = %+v, want selected path and current fixed_args digest", approval)
 	}
 
 	// unset-path
@@ -301,8 +325,8 @@ func TestRunRuntimeProfileSetAndUnsetPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCLIConfig after unset: %v", err)
 	}
-	if _, ok := cfg.ProfileCommandOverrides["prof-1"]; ok {
-		t.Fatalf("override should be removed after unset, got %#v", cfg.ProfileCommandOverrides)
+	if _, ok := cfg.RuntimeProfileApprovals["prof-1"]; ok {
+		t.Fatalf("approval should be removed after unset, got %#v", cfg.RuntimeProfileApprovals)
 	}
 }
 
@@ -315,9 +339,34 @@ func TestRunRuntimeProfileSetPathRejectsRelative(t *testing.T) {
 	}
 }
 
+func TestRunRuntimeProfileSetPathRequiresExplicitArgumentApproval(t *testing.T) {
+	redirectTestHome(t, t.TempDir())
+	stubRuntimeProfileApprovalAPI(t, "prof-1", []string{"-c", "touch /tmp/owned"})
+	cmd := newProfileSetPathTestCmd()
+	_ = cmd.Flags().Set("path", "/bin/sh")
+	err := runRuntimeProfileSetPath(cmd, []string{"prof-1"})
+	if err == nil || !strings.Contains(err.Error(), `fixed_args ["-c","touch /tmp/owned"]`) || !strings.Contains(err.Error(), cli.RuntimeProfileFixedArgsSHA256([]string{"-c", "touch /tmp/owned"})) {
+		t.Fatalf("error = %v, want safely rendered fixed_args review", err)
+	}
+	cfg, loadErr := cli.LoadCLIConfig()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(cfg.RuntimeProfileApprovals) != 0 {
+		t.Fatalf("unconfirmed arguments wrote an approval: %+v", cfg.RuntimeProfileApprovals)
+	}
+	staleCmd := newProfileSetPathTestCmd()
+	_ = staleCmd.Flags().Set("path", "/bin/sh")
+	_ = staleCmd.Flags().Set("approve-args-sha256", cli.RuntimeProfileFixedArgsSHA256([]string{"safe-subcommand"}))
+	if err := runRuntimeProfileSetPath(staleCmd, []string{"prof-1"}); err == nil || !strings.Contains(err.Error(), "fixed_args changed") {
+		t.Fatalf("stale approval error = %v, want changed-arguments rejection", err)
+	}
+}
+
 func TestRunRuntimeProfileSetPathPreservesExistingConfig(t *testing.T) {
 	home := t.TempDir()
 	redirectTestHome(t, home)
+	stubRuntimeProfileApprovalAPI(t, "prof-1", nil)
 
 	// Seed an existing config with unrelated fields.
 	seed := cli.CLIConfig{ServerURL: "https://api.multica.ai", WorkspaceID: "ws-123", Token: "mul_xyz"}
@@ -327,6 +376,7 @@ func TestRunRuntimeProfileSetPathPreservesExistingConfig(t *testing.T) {
 
 	cmd := newProfileSetPathTestCmd()
 	_ = cmd.Flags().Set("path", "/opt/bin/company-codex")
+	_ = cmd.Flags().Set("approve-args-sha256", cli.RuntimeProfileFixedArgsSHA256(nil))
 	if err := runRuntimeProfileSetPath(cmd, []string{"prof-1"}); err != nil {
 		t.Fatalf("runRuntimeProfileSetPath: %v", err)
 	}
@@ -338,8 +388,8 @@ func TestRunRuntimeProfileSetPathPreservesExistingConfig(t *testing.T) {
 	if cfg.ServerURL != "https://api.multica.ai" || cfg.WorkspaceID != "ws-123" || cfg.Token != "mul_xyz" {
 		t.Errorf("set-path clobbered existing config: %#v", cfg)
 	}
-	if cfg.ProfileCommandOverrides["prof-1"] != "/opt/bin/company-codex" {
-		t.Errorf("override not written: %#v", cfg.ProfileCommandOverrides)
+	if got := cfg.RuntimeProfileApprovals["prof-1"]; got.Path != "/opt/bin/company-codex" || got.FixedArgsSHA256 != cli.RuntimeProfileFixedArgsSHA256(nil) {
+		t.Errorf("approval not written: %#v", cfg.RuntimeProfileApprovals)
 	}
 }
 

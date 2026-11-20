@@ -166,12 +166,12 @@ func TestCLIConfig_OpenClawOverride_PartialFieldsOmitted(t *testing.T) {
 	}
 }
 
-// TestCLIConfig_ProfileCommandOverrides_RoundTrip verifies that pinning a
-// per-machine profile command path survives a save/load cycle AND that
+// TestCLIConfig_RuntimeProfileApprovals_RoundTrip verifies that approving a
+// per-machine profile command and argument digest survives a save/load cycle AND that
 // unrelated fields (server_url, token, backends) are preserved across the
 // round-trip — the set-path / unset-path CLI commands rely on a
 // load->modify->save cycle never dropping config the user already had.
-func TestCLIConfig_ProfileCommandOverrides_RoundTrip(t *testing.T) {
+func TestCLIConfig_RuntimeProfileApprovals_RoundTrip(t *testing.T) {
 	tmp := t.TempDir()
 	redirectTestHome(t, tmp)
 
@@ -183,9 +183,9 @@ func TestCLIConfig_ProfileCommandOverrides_RoundTrip(t *testing.T) {
 		Backends: &BackendOverrides{
 			OpenClaw: &OpenClawOverride{StateDir: "/var/lib/openclaw-prod"},
 		},
-		ProfileCommandOverrides: map[string]string{
-			"prof-1": "/opt/bin/company-codex",
-			"prof-2": "/usr/local/bin/special-claude",
+		RuntimeProfileApprovals: map[string]RuntimeProfileApproval{
+			"prof-1": {Path: "/opt/bin/company-codex", FixedArgsSHA256: RuntimeProfileFixedArgsSHA256([]string{"start", "tenant-1"})},
+			"prof-2": {Path: "/usr/local/bin/special-claude", FixedArgsSHA256: RuntimeProfileFixedArgsSHA256(nil)},
 		},
 	}
 	if err := SaveCLIConfig(original); err != nil {
@@ -197,15 +197,15 @@ func TestCLIConfig_ProfileCommandOverrides_RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The override map must round-trip intact.
-	if len(loaded.ProfileCommandOverrides) != 2 {
-		t.Fatalf("ProfileCommandOverrides len = %d, want 2: %+v", len(loaded.ProfileCommandOverrides), loaded.ProfileCommandOverrides)
+	// The approval map must round-trip intact.
+	if len(loaded.RuntimeProfileApprovals) != 2 {
+		t.Fatalf("RuntimeProfileApprovals len = %d, want 2: %+v", len(loaded.RuntimeProfileApprovals), loaded.RuntimeProfileApprovals)
 	}
-	if got := loaded.ProfileCommandOverrides["prof-1"]; got != "/opt/bin/company-codex" {
-		t.Errorf("prof-1 override = %q, want /opt/bin/company-codex", got)
+	if got := loaded.RuntimeProfileApprovals["prof-1"]; got.Path != "/opt/bin/company-codex" || got.FixedArgsSHA256 != RuntimeProfileFixedArgsSHA256([]string{"start", "tenant-1"}) {
+		t.Errorf("prof-1 approval = %+v, want path and fixed_args digest", got)
 	}
-	if got := loaded.ProfileCommandOverrides["prof-2"]; got != "/usr/local/bin/special-claude" {
-		t.Errorf("prof-2 override = %q, want /usr/local/bin/special-claude", got)
+	if got := loaded.RuntimeProfileApprovals["prof-2"]; got.Path != "/usr/local/bin/special-claude" || got.FixedArgsSHA256 != RuntimeProfileFixedArgsSHA256(nil) {
+		t.Errorf("prof-2 approval = %+v, want path and empty fixed_args digest", got)
 	}
 
 	// Every other field must be preserved (no clobbering on round-trip).
@@ -227,10 +227,10 @@ func TestCLIConfig_ProfileCommandOverrides_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestCLIConfig_ProfileCommandOverrides_OmittedWhenEmpty verifies the
+// TestCLIConfig_RuntimeProfileApprovals_OmittedWhenEmpty verifies the
 // omitempty tag keeps the key out of the on-disk JSON when no overrides are
 // set, so configs for users who never pin a path stay byte-stable.
-func TestCLIConfig_ProfileCommandOverrides_OmittedWhenEmpty(t *testing.T) {
+func TestCLIConfig_RuntimeProfileApprovals_OmittedWhenEmpty(t *testing.T) {
 	tmp := t.TempDir()
 	redirectTestHome(t, tmp)
 
@@ -247,8 +247,28 @@ func TestCLIConfig_ProfileCommandOverrides_OmittedWhenEmpty(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := raw["profile_command_overrides"]; ok {
-		t.Errorf("profile_command_overrides should be omitted when empty, got: %s", string(data))
+	if _, ok := raw["runtime_profile_approvals"]; ok {
+		t.Errorf("runtime_profile_approvals should be omitted when empty, got: %s", string(data))
+	}
+}
+
+func TestCLIConfig_LegacyProfilePathDoesNotBecomeApproval(t *testing.T) {
+	tmp := t.TempDir()
+	redirectTestHome(t, tmp)
+	cfgDir := filepath.Join(tmp, ".multica")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"profile_command_overrides":{"prof-1":"/bin/sh"}}`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadCLIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, approved := loaded.RuntimeProfileApprovals["prof-1"]; approved {
+		t.Fatal("legacy path-only config must not authorize a runtime profile")
 	}
 }
 

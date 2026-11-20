@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -21,14 +22,12 @@ import (
 // A runtime profile lets a workspace declare a custom agent runtime built on
 // top of a supported protocol family (the routing backend) but launched via a
 // site-specific command_name (e.g. a wrapper that injects credentials). The
-// profile lives server-side and is workspace-scoped; the daemon resolves the
-// command_name on each host's PATH at registration time.
+// profile lives server-side and is workspace-scoped; each daemon owner must
+// approve the exact executable and fixed arguments before it can run locally.
 //
-// `set-path` / `unset-path` are the per-machine escape hatch: they record a
-// profile_id -> absolute executable path mapping in this machine's local CLI
-// config so the daemon can launch a profile whose command isn't on PATH (or
-// pick a specific install among several). That mapping never leaves the
-// machine — it is not sent to the server.
+// `set-path` / `unset-path` manage that per-machine approval. The selected path
+// and current fixed_args digest stay in local CLI config and never leave the
+// machine.
 
 var runtimeProfileCmd = &cobra.Command{
 	Use:   "profile",
@@ -63,14 +62,14 @@ var runtimeProfileDeleteCmd = &cobra.Command{
 
 var runtimeProfileSetPathCmd = &cobra.Command{
 	Use:   "set-path <profile-id>",
-	Short: "Pin a per-machine executable path for a runtime profile (local only)",
+	Short: "Approve an executable and the current profile arguments on this machine",
 	Args:  exactArgs(1),
 	RunE:  runRuntimeProfileSetPath,
 }
 
 var runtimeProfileUnsetPathCmd = &cobra.Command{
 	Use:   "unset-path <profile-id>",
-	Short: "Remove a per-machine executable path override for a runtime profile",
+	Short: "Revoke a runtime profile's approval on this machine",
 	Args:  exactArgs(1),
 	RunE:  runRuntimeProfileUnsetPath,
 }
@@ -108,6 +107,7 @@ func init() {
 
 	// set-path
 	runtimeProfileSetPathCmd.Flags().String("path", "", "Absolute path to the executable on this machine (required)")
+	runtimeProfileSetPathCmd.Flags().String("approve-args-sha256", "", "Approve the displayed fixed arguments by their SHA-256 digest (required)")
 }
 
 // runtimeProfilesPath builds the workspace-scoped collection path.
@@ -316,19 +316,54 @@ func runRuntimeProfileSetPath(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--path must be an absolute path, got %q", path)
 	}
 
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	workspaceID, err := requireWorkspaceID(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	var current struct {
+		ID        string   `json:"id"`
+		FixedArgs []string `json:"fixed_args"`
+	}
+	profilePath := runtimeProfilesPath(workspaceID) + "/" + profileID
+	if err := client.GetJSON(ctx, profilePath, &current); err != nil {
+		return fmt.Errorf("load runtime profile for local approval: %w", err)
+	}
+	if !strings.EqualFold(current.ID, profileID) {
+		return fmt.Errorf("load runtime profile for local approval: response id %q does not match %q", current.ID, profileID)
+	}
+	profileID = current.ID
+	fixedArgsSHA256 := cli.RuntimeProfileFixedArgsSHA256(current.FixedArgs)
+	approvedSHA256, _ := cmd.Flags().GetString("approve-args-sha256")
+	if strings.TrimSpace(approvedSHA256) == "" {
+		encodedArgs, _ := json.Marshal(current.FixedArgs)
+		return fmt.Errorf("review fixed_args %s and rerun with --approve-args-sha256 %s", encodedArgs, fixedArgsSHA256)
+	}
+	if approvedSHA256 != fixedArgsSHA256 {
+		return fmt.Errorf("fixed_args changed or the approval digest is incorrect; review the profile and try again")
+	}
+
 	profile := resolveProfile(cmd)
 	cfg, err := cli.LoadCLIConfigForProfile(profile)
 	if err != nil {
 		return fmt.Errorf("load CLI config: %w", err)
 	}
-	if cfg.ProfileCommandOverrides == nil {
-		cfg.ProfileCommandOverrides = map[string]string{}
+	if cfg.RuntimeProfileApprovals == nil {
+		cfg.RuntimeProfileApprovals = map[string]cli.RuntimeProfileApproval{}
 	}
-	cfg.ProfileCommandOverrides[profileID] = path
+	cfg.RuntimeProfileApprovals[profileID] = cli.RuntimeProfileApproval{
+		Path:            path,
+		FixedArgsSHA256: fixedArgsSHA256,
+	}
 	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
 		return fmt.Errorf("save CLI config: %w", err)
 	}
-	fmt.Printf("Pinned runtime profile %s to %s on this machine.\n", profileID, path)
+	fmt.Printf("Approved runtime profile %s at %s with its current fixed arguments.\n", profileID, path)
 	fmt.Println("Restart the daemon for the change to take effect.")
 	return nil
 }
@@ -344,19 +379,19 @@ func runRuntimeProfileUnsetPath(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load CLI config: %w", err)
 	}
-	if _, ok := cfg.ProfileCommandOverrides[profileID]; !ok {
-		fmt.Printf("No per-machine path override set for runtime profile %s.\n", profileID)
+	_, approved := cfg.RuntimeProfileApprovals[profileID]
+	if !approved {
+		fmt.Printf("No local approval set for runtime profile %s.\n", profileID)
 		return nil
 	}
-	delete(cfg.ProfileCommandOverrides, profileID)
-	if len(cfg.ProfileCommandOverrides) == 0 {
-		// Normalize back to nil so the key drops out of the saved JSON.
-		cfg.ProfileCommandOverrides = nil
+	delete(cfg.RuntimeProfileApprovals, profileID)
+	if len(cfg.RuntimeProfileApprovals) == 0 {
+		cfg.RuntimeProfileApprovals = nil
 	}
 	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
 		return fmt.Errorf("save CLI config: %w", err)
 	}
-	fmt.Printf("Removed per-machine path override for runtime profile %s.\n", profileID)
+	fmt.Printf("Revoked the local approval for runtime profile %s.\n", profileID)
 	fmt.Println("Restart the daemon for the change to take effect.")
 	return nil
 }

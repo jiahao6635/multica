@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,25 @@ const (
 	// provider tooling while preventing implicit Owner-profile discovery.
 	TaskConfigRootEnv = "MULTICA_TASK_CONFIG_ROOT"
 )
+
+// RuntimeProfileApproval is the local authority for one workspace custom
+// runtime profile. The server supplies the profile ID and fixed arguments, but
+// only this machine's owner can select the executable and approve the exact
+// argument list that may reach it.
+type RuntimeProfileApproval struct {
+	Path            string `json:"path"`
+	FixedArgsSHA256 string `json:"fixed_args_sha256"`
+}
+
+// RuntimeProfileFixedArgsSHA256 returns a stable digest for the exact argument
+// vector. nil and [] are equivalent because both represent no launch prefix.
+func RuntimeProfileFixedArgsSHA256(fixedArgs []string) string {
+	if fixedArgs == nil {
+		fixedArgs = []string{}
+	}
+	payload, _ := json.Marshal(fixedArgs)
+	return fmt.Sprintf("%x", sha256.Sum256(payload))
+}
 
 // CLIConfig holds persistent CLI settings.
 type CLIConfig struct {
@@ -151,18 +171,11 @@ type CLIConfig struct {
 	// defaults" — the historical behavior. See issue #3875.
 	Backends *BackendOverrides `json:"backends,omitempty"`
 
-	// ProfileCommandOverrides is a per-machine map of custom runtime
-	// profile_id -> absolute executable path (MUL-3284). A workspace custom
-	// runtime profile records the command_name the daemon resolves on PATH,
-	// but the same logical profile may live at a different path on each
-	// machine (or not be on PATH at all). This map lets an operator pin the
-	// exact binary for a profile on this host via
-	// `multica runtime profile set-path`; the daemon prefers it over the
-	// PATH lookup in appendProfileRuntimes. Empty / absent means "resolve the
-	// profile's command_name on PATH" — the default behavior. The mapping is
-	// intentionally local-only (it is never sent to the server) because the
-	// path is a property of this machine, not of the shared profile.
-	ProfileCommandOverrides map[string]string `json:"profile_command_overrides,omitempty"`
+	// RuntimeProfileApprovals records the locally selected executable and the
+	// exact fixed_args digest approved for each opaque profile ID. It is written
+	// only by the human-only `runtime profile set-path` command and never sent to
+	// the server.
+	RuntimeProfileApprovals map[string]RuntimeProfileApproval `json:"runtime_profile_approvals,omitempty"`
 }
 
 // BackendOverrides holds per-backend configuration overrides. Each field is

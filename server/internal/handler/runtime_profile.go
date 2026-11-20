@@ -21,10 +21,11 @@ import (
 //
 // A runtime_profile is a workspace-level, team-shared definition of a custom
 // runtime — e.g. an in-house Codex wrapper. Daemons pull the enabled profiles
-// for their workspace, resolve command_name on PATH, and register an
-// agent_runtime instance carrying the profile_id. The profile only changes how
-// a runtime is launched/displayed. runtime_type selects a supported compatibility
-// target, and its descriptor determines the underlying protocol_family.
+// for their workspace but require a local executable and fixed_args approval
+// before registering an agent_runtime carrying the profile_id. The profile
+// only changes how a runtime is launched/displayed. runtime_type selects a
+// supported compatibility target, and its descriptor determines the underlying
+// protocol_family.
 //
 // Iron rule: a profile carries NO generic per-agent args. Per-agent launch args
 // stay on agent.custom_args. The only args field is fixed_args — args every
@@ -638,9 +639,8 @@ func (h *Handler) DeleteRuntimeProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 // DaemonListRuntimeProfiles serves the enabled runtime profiles for a workspace
-// to a daemon. The daemon resolves each profile's command_name on PATH and
-// registers an agent_runtime instance per profile it can run. Daemon-token
-// gated by the router.
+// to a daemon. The daemon treats the launch fields as untrusted until they
+// match a local owner approval. Daemon-token gated by the router.
 func (h *Handler) DaemonListRuntimeProfiles(w http.ResponseWriter, r *http.Request) {
 	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceId"))
 	if !h.requireDaemonWorkspaceAccess(w, r, workspaceID) {

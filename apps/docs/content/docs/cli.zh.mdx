@@ -402,7 +402,7 @@ CLI 配置文件包含可代表你访问 Multica 的令牌。不要提交到仓�
 | | `autostart enable/disable/status` | 登记或取消当前 profile 的开机自启 | `status`：`--output` |
 | `runtime` | `list/usage/activity/update/rename/delete` | 查看和管理运行时 | `usage`：`--days`（默认 90，最多 365）；`update`：`--target-version`（必填）、`--wait`；`delete`：`--cascade`（解绑绑定的智能体、保留其数据并取消其运行） |
 | | `profile list/create/update/delete` | 管理自定义运行时 profile | `create`：`--display-name`、`--command-name`（均必填）、`--runtime-type`（或旧的 `--protocol-family`）、`--description`；`update`：`--enabled` |
-| | `profile set-path/unset-path <profile-id>` | 固定本机可执行文件路径（仅本地生效，不上传服务器） | |
+| | `profile set-path/unset-path <profile-id>` | 批准或撤销本机可执行文件和配置当前的固定参数（不上传服务器） | `set-path`：`--path`（必填绝对路径）；检查参数后，用 `--approve-args-sha256` 传入显示的摘要 |
 
 ### Additional
 

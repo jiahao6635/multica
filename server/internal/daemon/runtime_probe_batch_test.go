@@ -522,7 +522,7 @@ func TestSyncWorkspaces_ProbesBuiltinCLIsOncePerBatch(t *testing.T) {
 // registration.
 func TestSyncWorkspaces_CustomProfilesDoNotLeakAcrossWorkspaces(t *testing.T) {
 	fx := newBatchFixture(t)
-	stubLookPath(t, map[string]string{"company-codex": "/opt/bin/company-codex"})
+	stubResolveProfileOverridePath(t, map[string]string{"/opt/bin/company-codex": "/opt/bin/company-codex"})
 	d := fx.daemon
 	d.cfg.Agents = map[string]AgentEntry{"claude": {Path: "/fake/claude"}}
 	fx.setWorkspaces(
@@ -534,6 +534,7 @@ func TestSyncWorkspaces_CustomProfilesDoNotLeakAcrossWorkspaces(t *testing.T) {
 		ProtocolFamily: "codex", CommandName: "company-codex",
 		Visibility: "workspace", Enabled: true,
 	}}
+	approveRuntimeProfile(d, fx.profiles["ws-1"][0], "/opt/bin/company-codex")
 
 	if err := d.syncWorkspacesFromAPI(context.Background(), false); err != nil {
 		t.Fatalf("syncWorkspacesFromAPI: %v", err)
@@ -896,7 +897,7 @@ func TestDetectBuiltinRuntimes_DoesNotRetryMinVersionRejection(t *testing.T) {
 // hands to every later workspace.
 func TestRegisterRuntimesForWorkspaceBatch_DoesNotMutateSharedPayload(t *testing.T) {
 	fx := newBatchFixture(t)
-	stubLookPath(t, map[string]string{"company-codex": "/opt/bin/company-codex"})
+	stubResolveProfileOverridePath(t, map[string]string{"/opt/bin/company-codex": "/opt/bin/company-codex"})
 	d := fx.daemon
 	d.cfg.Agents = map[string]AgentEntry{}
 	fx.profiles["ws-1"] = []RuntimeProfile{{
@@ -904,6 +905,7 @@ func TestRegisterRuntimesForWorkspaceBatch_DoesNotMutateSharedPayload(t *testing
 		ProtocolFamily: "codex", CommandName: "company-codex",
 		Visibility: "workspace", Enabled: true,
 	}}
+	approveRuntimeProfile(d, fx.profiles["ws-1"][0], "/opt/bin/company-codex")
 
 	builtins := []map[string]string{
 		{"name": "Claude Code", "type": "claude", "version": "9.9.9", "status": "online"},

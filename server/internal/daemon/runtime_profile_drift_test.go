@@ -296,7 +296,7 @@ func TestSyncWorkspacesRefreshesRuntimeProfilesOnReconcile(t *testing.T) {
 // re-register.
 func TestRefreshWorkspaceRuntimeProfiles_NoDrift_DoesNotReregister(t *testing.T) {
 	t.Cleanup(stubAgentVersion(t))
-	stubLookPath(t, map[string]string{"company-codex": "/opt/bin/company-codex"})
+	stubResolveProfileOverridePath(t, map[string]string{"/opt/bin/company-codex": "/opt/bin/company-codex"})
 	profiles := []RuntimeProfile{{
 		ID: "prof-1", WorkspaceID: "ws-1", DisplayName: "Company Codex",
 		ProtocolFamily: "codex", CommandName: "company-codex",
@@ -305,6 +305,7 @@ func TestRefreshWorkspaceRuntimeProfiles_NoDrift_DoesNotReregister(t *testing.T)
 	fx := newDriftFixture(t, profiles)
 	d := fx.daemon
 	d.cfg.Agents = map[string]AgentEntry{}
+	approveRuntimeProfile(d, profiles[0], "/opt/bin/company-codex")
 
 	// Initial register seeds workspaceState (and ws.profileSetSig).
 	resp, profileSig, _, err := d.registerRuntimesForWorkspaceLocked(context.Background(), "ws-1")
@@ -335,9 +336,9 @@ func TestRefreshWorkspaceRuntimeProfiles_NoDrift_DoesNotReregister(t *testing.T)
 // receives the server's change notification — no daemon restart required.
 func TestRefreshWorkspaceRuntimeProfiles_NewProfileTriggersReregister(t *testing.T) {
 	t.Cleanup(stubAgentVersion(t))
-	stubLookPath(t, map[string]string{
-		"company-codex": "/opt/bin/company-codex",
-		"team-claude":   "/opt/bin/team-claude",
+	stubResolveProfileOverridePath(t, map[string]string{
+		"/opt/bin/company-codex": "/opt/bin/company-codex",
+		"/opt/bin/team-claude":   "/opt/bin/team-claude",
 	})
 	initial := []RuntimeProfile{{
 		ID: "prof-1", WorkspaceID: "ws-1", DisplayName: "Company Codex",
@@ -347,6 +348,7 @@ func TestRefreshWorkspaceRuntimeProfiles_NewProfileTriggersReregister(t *testing
 	fx := newDriftFixture(t, initial)
 	d := fx.daemon
 	d.cfg.Agents = map[string]AgentEntry{}
+	approveRuntimeProfile(d, initial[0], "/opt/bin/company-codex")
 
 	// Initial register with one profile.
 	resp, profileSig, _, err := d.registerRuntimesForWorkspaceLocked(context.Background(), "ws-1")
@@ -372,6 +374,7 @@ func TestRefreshWorkspaceRuntimeProfiles_NewProfileTriggersReregister(t *testing
 			ProtocolFamily: "claude", CommandName: "team-claude",
 			Visibility: "workspace", Enabled: true},
 	})
+	approveRuntimeProfile(d, fx.currentProfiles[1], "/opt/bin/team-claude")
 
 	if err := d.refreshWorkspaceRuntimeProfiles(context.Background(), "ws-1"); err != nil {
 		t.Fatalf("refreshWorkspaceRuntimeProfiles: %v", err)
@@ -427,9 +430,9 @@ func TestRefreshWorkspaceRuntimeProfiles_NewProfileTriggersReregister(t *testing
 // runtime IDs untouched and recover-orphans untriggered.
 func TestRefreshWorkspaceRuntimeProfiles_DriftWithRunningRuntimeSkipsOrphanRecovery(t *testing.T) {
 	t.Cleanup(stubAgentVersion(t))
-	stubLookPath(t, map[string]string{
-		"company-codex": "/opt/bin/company-codex",
-		"team-claude":   "/opt/bin/team-claude",
+	stubResolveProfileOverridePath(t, map[string]string{
+		"/opt/bin/company-codex": "/opt/bin/company-codex",
+		"/opt/bin/team-claude":   "/opt/bin/team-claude",
 	})
 	// Mixed setup: one built-in runtime (claude) plus one custom profile,
 	// the closest analogue of "a daemon that is running real work and the
@@ -442,6 +445,7 @@ func TestRefreshWorkspaceRuntimeProfiles_DriftWithRunningRuntimeSkipsOrphanRecov
 	fx := newDriftFixture(t, initial)
 	d := fx.daemon
 	d.cfg.Agents = map[string]AgentEntry{"claude": {Path: "/usr/bin/true"}}
+	approveRuntimeProfile(d, initial[0], "/opt/bin/company-codex")
 
 	resp, profileSig, _, err := d.registerRuntimesForWorkspaceLocked(context.Background(), "ws-1")
 	if err != nil {
@@ -467,6 +471,7 @@ func TestRefreshWorkspaceRuntimeProfiles_DriftWithRunningRuntimeSkipsOrphanRecov
 			ProtocolFamily: "claude", CommandName: "team-claude",
 			Visibility: "workspace", Enabled: true},
 	})
+	approveRuntimeProfile(d, fx.currentProfiles[1], "/opt/bin/team-claude")
 
 	if err := d.refreshWorkspaceRuntimeProfiles(context.Background(), "ws-1"); err != nil {
 		t.Fatalf("refreshWorkspaceRuntimeProfiles: %v", err)
@@ -489,7 +494,7 @@ func TestRefreshWorkspaceRuntimeProfiles_DriftWithRunningRuntimeSkipsOrphanRecov
 // can no longer use.
 func TestRefreshWorkspaceRuntimeProfiles_DisableConvergesCustomOnlyDaemon(t *testing.T) {
 	t.Cleanup(stubAgentVersion(t))
-	stubLookPath(t, map[string]string{"company-codex": "/opt/bin/company-codex"})
+	stubResolveProfileOverridePath(t, map[string]string{"/opt/bin/company-codex": "/opt/bin/company-codex"})
 	initial := []RuntimeProfile{{
 		ID: "prof-1", WorkspaceID: "ws-1", DisplayName: "Company Codex",
 		ProtocolFamily: "codex", CommandName: "company-codex",
@@ -499,6 +504,7 @@ func TestRefreshWorkspaceRuntimeProfiles_DisableConvergesCustomOnlyDaemon(t *tes
 	d := fx.daemon
 	// Custom-only daemon: no built-in agents at all.
 	d.cfg.Agents = map[string]AgentEntry{}
+	approveRuntimeProfile(d, initial[0], "/opt/bin/company-codex")
 
 	// Initial register: one custom runtime.
 	resp, profileSig, _, err := d.registerRuntimesForWorkspaceLocked(context.Background(), "ws-1")
@@ -588,7 +594,7 @@ func TestRefreshWorkspaceRuntimeProfiles_DisableConvergesCustomOnlyDaemon(t *tes
 // Deregistered so the server marks it offline immediately.
 func TestRefreshWorkspaceRuntimeProfiles_DisableOneOfManyDeregistersDroppedID(t *testing.T) {
 	t.Cleanup(stubAgentVersion(t))
-	stubLookPath(t, map[string]string{"company-codex": "/opt/bin/company-codex"})
+	stubResolveProfileOverridePath(t, map[string]string{"/opt/bin/company-codex": "/opt/bin/company-codex"})
 	initial := []RuntimeProfile{{
 		ID: "prof-1", WorkspaceID: "ws-1", DisplayName: "Company Codex",
 		ProtocolFamily: "codex", CommandName: "company-codex",
@@ -598,6 +604,7 @@ func TestRefreshWorkspaceRuntimeProfiles_DisableOneOfManyDeregistersDroppedID(t 
 	d := fx.daemon
 	// Mixed: one built-in + one custom.
 	d.cfg.Agents = map[string]AgentEntry{"claude": {Path: "/usr/bin/true"}}
+	approveRuntimeProfile(d, initial[0], "/opt/bin/company-codex")
 
 	resp, profileSig, _, err := d.registerRuntimesForWorkspaceLocked(context.Background(), "ws-1")
 	if err != nil {
@@ -662,7 +669,6 @@ func TestRefreshWorkspaceRuntimeProfiles_DisableOneOfManyDeregistersDroppedID(t 
 // or trigger a spurious re-register.
 func TestRefreshWorkspaceRuntimeProfiles_FetchErrorIsBestEffort(t *testing.T) {
 	t.Cleanup(stubAgentVersion(t))
-	stubLookPath(t, map[string]string{"company-codex": "/opt/bin/company-codex"})
 	profiles := []RuntimeProfile{{
 		ID: "prof-1", WorkspaceID: "ws-1", DisplayName: "Company Codex",
 		ProtocolFamily: "codex", CommandName: "company-codex",
