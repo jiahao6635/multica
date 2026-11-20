@@ -224,7 +224,7 @@ Only workspace owners and admins can create, edit, or delete custom runtime prof
 3. Choose the protocol family the command is actually compatible with.
 4. Fill in the name, command, and fixed arguments, then save.
 
-The profile is shared across the workspace. Each connected computer looks up the command on its own; only computers that can resolve it on `PATH` register the corresponding runtime. Creating a profile does not install the command, and it does not sign other members in to the tool.
+The profile definition is shared across the workspace, but it does not authorize commands on members' computers. On each computer, its owner must approve an absolute executable path and the profile's current fixed arguments before the daemon registers the runtime. The approval remains local and creating a profile neither installs the command nor signs other members in to the tool.
 
 The command field takes an executable and arguments, not a shell script. Plain arguments, quotes, and backslash escapes work; pipes, redirects, `&&`, `;`, backticks, and environment variable expansion do not. When you need those behaviors, put them in a wrapper script and use that script as the command.
 
@@ -245,19 +245,21 @@ Also:
 - **Multica's own values win a conflict.** If your fixed arguments set a flag Multica also sets, Multica's value comes later and takes effect. Most importantly, a model chosen on the agent overrides a `--model` pinned in the profile. To pin a model for everyone, leave the agents' model field empty.
 - **Protocol-critical flags are ignored.** `-p`, `--output-format`, `--input-format`, `--permission-mode`, and the equivalents for other families are dropped from your fixed arguments, because overriding them would break the daemon's connection to the tool. Subcommands and other positional arguments always pass through.
 
-If a Desktop-launched daemon cannot find a command your terminal can run, set an absolute path for the current computer:
+Approve the executable and current fixed arguments on every computer that should host the profile:
 
 ```bash
 multica runtime profile set-path <profile-id> --path /absolute/path/to/command
+# Review the fixed_args displayed by the command, then rerun with:
+multica runtime profile set-path <profile-id> --path /absolute/path/to/command --approve-args-sha256 <displayed-digest>
 ```
 
-Remove the path override:
+Restart the daemon after saving the approval. If an administrator changes `fixed_args`, the daemon rejects the changed profile before resolving or probing the executable; review the new arguments, run `set-path` again, and restart. Revoke the approval with:
 
 ```bash
 multica runtime profile unset-path <profile-id>
 ```
 
-Editing a profile only affects runs claimed afterwards. Before deleting a profile, deal with the active agents still bound to its runtimes. Deleting only the runtime instance on one computer does not delete the profile — a running daemon will re-register it.
+Editing a profile only affects runs claimed afterwards, and an argument change requires fresh local approval. Before deleting a profile, deal with the active agents still bound to its runtimes. Deleting only the runtime instance on one computer does not delete the profile — an approved profile can be registered again by a running daemon.
 
 ## Qoder Cloud Agents remote runtime
 

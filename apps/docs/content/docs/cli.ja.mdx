@@ -402,7 +402,7 @@ CLI の設定ファイルには、あなたとして Multica にアクセスで�
 | | `autostart enable/disable/status` | 現在のプロファイルのログイン時自動起動を登録・解除 | `status`: `--output` |
 | `runtime` | `list/usage/activity/update/rename/delete` | ランタイムを表示・管理 | `usage`: `--days`（既定 90、最大 365）；`update`: `--target-version`（必須）、`--wait`；`delete`: `--cascade`（紐付くエージェントを解除してデータを保持し、その実行をキャンセル） |
 | | `profile list/create/update/delete` | カスタムランタイムプロファイルを管理 | `create`: `--display-name`、`--command-name`（いずれも必須）、`--runtime-type`（または古い `--protocol-family`）、`--description`；`update`: `--enabled` |
-| | `profile set-path/unset-path <profile-id>` | ローカルの実行ファイルパスを固定（ローカルのみ有効。サーバーには送信されません） | |
+| | `profile set-path/unset-path <profile-id>` | ローカル実行ファイルとプロファイルの現在の固定引数を承認または取り消し（サーバーには送信されません） | `set-path`: `--path`（絶対パス、必須）、引数確認後に表示されたダイジェストを指定する `--approve-args-sha256` |
 
 ### Additional
 

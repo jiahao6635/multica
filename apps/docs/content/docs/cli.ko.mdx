@@ -402,7 +402,7 @@ CLI 설정 파일에는 사용자를 대신해 Multica에 접근할 수 있는 t
 | | `autostart enable/disable/status` | 현재 profile의 로그인 시 자동 시작 등록 또는 해제 | `status`: `--output` |
 | `runtime` | `list/usage/activity/update/rename/delete` | 런타임 확인 및 관리 | `usage`: `--days`(기본값 90, 최대 365). `update`: `--target-version`(필수), `--wait`. `delete`: `--cascade`(연결된 에이전트의 런타임을 해제하고 데이터를 보존하며 실행 취소) |
 | | `profile list/create/update/delete` | 사용자 지정 런타임 profile 관리 | `create`: `--display-name`, `--command-name`(모두 필수), `--runtime-type`(또는 예전 `--protocol-family`), `--description`. `update`: `--enabled` |
-| | `profile set-path/unset-path <profile-id>` | 로컬 실행 파일 경로 고정(로컬에만 적용되고 서버에 업로드되지 않음) | |
+| | `profile set-path/unset-path <profile-id>` | 로컬 실행 파일과 설정의 현재 고정 인수 승인 또는 취소(서버에 업로드되지 않음) | `set-path`: `--path`(절대 경로, 필수), 인수 검토 후 표시된 다이제스트를 전달하는 `--approve-args-sha256` |
 
 ### Additional
 

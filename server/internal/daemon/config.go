@@ -158,13 +158,10 @@ type Config struct {
 	QwenArgs                    []string
 	QwenpawArgs                 []string
 
-	// ProfileCommandOverrides maps a custom runtime profile_id -> the absolute
-	// executable path to use for that profile on THIS machine (MUL-3284).
-	// Sourced from the local CLI config (cli.CLIConfig.ProfileCommandOverrides),
-	// written by `multica runtime profile set-path`. appendProfileRuntimes
-	// prefers a matching, executable override over resolving the profile's
-	// command_name on PATH. nil/empty means "always resolve via PATH".
-	ProfileCommandOverrides map[string]string
+	// RuntimeProfileApprovals are the local daemon owner's executable and
+	// fixed_args approvals for workspace custom runtime profiles. A profile is
+	// never resolved or probed without a matching entry.
+	RuntimeProfileApprovals map[string]cli.RuntimeProfileApproval
 }
 
 // Overrides allows CLI flags to override environment variables and defaults.
@@ -239,7 +236,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// file should not prevent daemon startup, since the daemon can still run
 	// purely from env-var configuration. We log a warning and proceed with
 	// no overrides.
-	var profileCommandOverrides map[string]string
+	var runtimeProfileApprovals map[string]cli.RuntimeProfileApproval
 	if cliCfg, err := cli.LoadCLIConfigForProfile(overrides.Profile); err != nil {
 		slog.Warn("could not load CLI config for backend overrides; proceeding without",
 			"profile", overrides.Profile, "err", err)
@@ -247,16 +244,15 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		if oc := openclawOverrideFrom(cliCfg); oc != nil {
 			applyOpenclawOverride(oc)
 		}
-		// Per-machine custom-runtime command path overrides (MUL-3284).
-		// Copy into our own map so later mutation of the loaded config can't
-		// alias daemon state, and so an empty map normalizes to nil.
-		if len(cliCfg.ProfileCommandOverrides) > 0 {
-			profileCommandOverrides = make(map[string]string, len(cliCfg.ProfileCommandOverrides))
-			for id, path := range cliCfg.ProfileCommandOverrides {
-				if id == "" || strings.TrimSpace(path) == "" {
+		// Copy local runtime-profile approvals into daemon-owned state so later
+		// config mutation cannot change the active authorization boundary.
+		if len(cliCfg.RuntimeProfileApprovals) > 0 {
+			runtimeProfileApprovals = make(map[string]cli.RuntimeProfileApproval, len(cliCfg.RuntimeProfileApprovals))
+			for id, approval := range cliCfg.RuntimeProfileApprovals {
+				if id == "" || strings.TrimSpace(approval.Path) == "" || approval.FixedArgsSHA256 == "" {
 					continue
 				}
-				profileCommandOverrides[id] = path
+				runtimeProfileApprovals[id] = approval
 			}
 		}
 	}
@@ -663,7 +659,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		CodebuddyArgs:                   codebuddyArgs,
 		QwenArgs:                        qwenArgs,
 		QwenpawArgs:                     qwenpawArgs,
-		ProfileCommandOverrides:         profileCommandOverrides,
+		RuntimeProfileApprovals:         runtimeProfileApprovals,
 	}, nil
 }
 

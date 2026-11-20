@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -48,7 +47,7 @@ var ErrRepoNotConfigured = errors.New("repo is not configured for this workspace
 // ErrNoRuntimesToRegister is returned by registerRuntimesForWorkspace when
 // the daemon has nothing to host on a workspace — typically a custom-only
 // daemon whose only enabled custom runtime profile was just disabled, leaving
-// zero built-in agents and zero resolvable profiles. Callers must
+// zero built-in agents and zero locally approved profiles. Callers must
 // differentiate by intent: initial registration (syncWorkspacesFromAPI's
 // new-workspace branch) treats this as a config error and skips the
 // workspace until something changes; the profile-drift refresh path
@@ -325,13 +324,8 @@ var (
 	// shelling out to a real CLI. Mirrors the detectAgentVersion hook above.
 	listModels = agent.ListModels
 
-	// lookPath is an indirection over exec.LookPath so registration tests can
-	// resolve custom runtime-profile commands without manipulating the
-	// process PATH. Mirrors the detectAgentVersion hook above.
-	lookPath = exec.LookPath
-
 	// resolveProfileOverridePath is what appendProfileRuntimes uses before
-	// trusting a per-machine command path override (MUL-3284). It must be the
+	// trusting a per-machine command approval. It must be the
 	// same contract agent launches use — resolveAgentExecutablePath /
 	// exec.LookPath — so Windows PATHEXT completion (.cmd shims, extension-less
 	// pins) and unix exec-bit checks stay in one place. A stale or mistyped
@@ -457,7 +451,7 @@ type Daemon struct {
 	// profileLaunchSpecs maps a custom runtime profile_id -> the absolute
 	// executable path plus fixed launch args resolved for that profile
 	// (MUL-3284). Populated in registerRuntimesForWorkspace when a profile's
-	// command resolves; read by runTask to launch the custom command for a
+	// local approval resolves; read by runTask to launch the custom command for a
 	// claimed task. Guarded by mu.
 	profileLaunchSpecs map[string]profileLaunchSpec
 	reloading          sync.Mutex         // prevents concurrent workspace syncs
@@ -2266,7 +2260,7 @@ func (d *Daemon) recordProfileLaunch(profileID, path, version string, fixedArgs 
 // customProfileLaunchForRuntime returns the resolved custom executable path and
 // fixed args for a claimed task's RuntimeID, and whether the runtime is a
 // custom-profile runtime. It returns false for built-in runtimes (no profile)
-// and for runtimes whose profile command was never resolved on this host.
+// and for runtimes whose local profile approval was never resolved on this host.
 func (d *Daemon) customProfileLaunchForRuntime(runtimeID string) (profileLaunchSpec, bool) {
 	if runtimeID == "" {
 		return profileLaunchSpec{}, false
@@ -2904,12 +2898,12 @@ func (d *Daemon) registerRuntimesForWorkspaceBatchLocked(ctx context.Context, wo
 	runtimes := cloneRuntimeEntries(builtins)
 	var failedProfiles []map[string]string
 
-	// Append any workspace custom runtime profiles whose command resolves on
-	// this host (MUL-3284). This is best-effort: a fetch error (e.g. an older
+	// Append any workspace custom runtime profiles approved on this host
+	// (MUL-3284). This is best-effort: a fetch error (e.g. an older
 	// server returning 404) must never fail registration — the daemon simply
 	// continues with the built-in runtimes it already collected. A profile
-	// whose command_name is neither on PATH nor already discovered for the same
-	// protocol family is skipped (the host doesn't have it).
+	// without a matching executable and fixed_args approval is reported as
+	// failed without resolving its server-selected command_name.
 	//
 	// profileSig is a content hash of the workspace's profile list captured
 	// here so an on-demand server notification can skip re-registration when
@@ -2998,15 +2992,15 @@ func (d *Daemon) registerBuiltinRuntimesForWorkspaceLocked(ctx context.Context, 
 
 // appendProfileRuntimes fetches the workspace's enabled custom runtime
 // profiles (MUL-3284) and appends a runtime registration entry for each one
-// whose command_name resolves on this host. For each resolved profile
-// it records the absolute command path and fixed args keyed by profile_id (via
-// recordProfileLaunch) so runTask can later launch the custom executable for a
-// claimed task.
+// whose exact executable and fixed_args were approved on this host. For each
+// approved profile it records the absolute command path and fixed args keyed by
+// profile_id (via recordProfileLaunch) so runTask can later launch the custom
+// executable for a claimed task.
 //
 // Best-effort by contract: any error fetching profiles (older server, network
 // blip) is logged and swallowed — registration proceeds with the built-in
-// runtimes already collected. A profile whose command cannot be resolved is
-// skipped with an Info log (this host simply doesn't have that command).
+// runtimes already collected. An unapproved, changed, or unavailable profile
+// is reported as failed without resolving or executing server-selected input.
 //
 // The registration entry mirrors the built-in shape: name = display_name
 // (suffixed with the device name like the built-in path), type =
@@ -3054,61 +3048,43 @@ func (d *Daemon) appendProfileRuntimes(ctx context.Context, workspaceID string, 
 			})
 			continue
 		}
-		// Resolve the executable to launch for this profile. A per-machine
-		// path override (MUL-3284, `multica runtime profile set-path`) wins
-		// over the PATH lookup when it is set AND points at a real
-		// executable — this is how an operator pins a profile to a binary
-		// that isn't on the daemon's PATH, or selects between multiple
-		// installs on the same host. A configured-but-unusable override
-		// (deleted/moved/non-executable) is logged and falls back to PATH
-		// and then to the matching provider command already discovered at
-		// daemon startup. The latter matters for GUI-launched daemons whose
-		// environment cannot resolve a CLI directly even though built-in
-		// discovery found it through a login shell or provider install path.
-		// When none of those sources resolves, the profile is skipped.
-		var resolved string
-		var failureReason string
-		if override := strings.TrimSpace(d.cfg.ProfileCommandOverrides[profile.ID]); override != "" {
-			if path, err := resolveProfileOverridePath(override); err == nil {
-				resolved = path
-				d.logger.Info("custom runtime profile: using per-machine command path override",
-					"workspace_id", workspaceID, "profile_id", profile.ID, "command_path", resolved)
-			} else {
-				failureReason = "Configured path override is not executable: " + override
-				d.logger.Warn("custom runtime profile: command path override not executable; falling back to PATH",
-					"workspace_id", workspaceID, "profile_id", profile.ID,
-					"override_path", override, "command_name", profile.CommandName)
-			}
+		approval, approved := d.cfg.RuntimeProfileApprovals[profile.ID]
+		if !approved || strings.TrimSpace(approval.Path) == "" {
+			reason := "local approval required; run `multica runtime profile set-path " + profile.ID + " --path <absolute-path>` on this machine"
+			d.logger.Warn("skip custom runtime profile: local approval required",
+				"workspace_id", workspaceID, "profile_id", profile.ID)
+			*failedProfiles = append(*failedProfiles, map[string]string{
+				"profile_id":   profile.ID,
+				"command_name": profile.CommandName,
+				"reason":       reason,
+			})
+			continue
 		}
-		if resolved == "" {
-			r, err := lookPath(profile.CommandName)
-			if err != nil {
-				if discovered, ok := d.agents()[runtimeType]; ok && discovered.Command == profile.CommandName && discovered.Path != "" {
-					resolved = discovered.Path
-					d.logger.Info("custom runtime profile: using discovered provider command path",
-						"workspace_id", workspaceID, "profile_id", profile.ID,
-						"protocol_family", profile.ProtocolFamily, "command_path", resolved)
-				} else {
-					// Host doesn't have this command — expected on hosts that aren't
-					// provisioned for this profile. Skip without failing.
-					d.logger.Info("skip custom runtime profile: command not found on PATH or provider discovery",
-						"workspace_id", workspaceID, "profile_id", profile.ID,
-						"command_name", profile.CommandName, "error", err)
-					if failureReason != "" {
-						failureReason += "; "
-					}
-					failureReason += "command not found on PATH or provider discovery: " + profile.CommandName
-					*failedProfiles = append(*failedProfiles, map[string]string{
-						"profile_id":   profile.ID,
-						"command_name": profile.CommandName,
-						"reason":       failureReason,
-					})
-					continue
-				}
-			} else {
-				resolved = r
-			}
+		if got := cli.RuntimeProfileFixedArgsSHA256(profile.FixedArgs); got != approval.FixedArgsSHA256 {
+			reason := "local approval no longer matches fixed_args; rerun `multica runtime profile set-path " + profile.ID + " --path <absolute-path>` on this machine"
+			d.logger.Warn("skip custom runtime profile: fixed_args changed after local approval",
+				"workspace_id", workspaceID, "profile_id", profile.ID)
+			*failedProfiles = append(*failedProfiles, map[string]string{
+				"profile_id":   profile.ID,
+				"command_name": profile.CommandName,
+				"reason":       reason,
+			})
+			continue
 		}
+		resolved, err := resolveProfileOverridePath(strings.TrimSpace(approval.Path))
+		if err != nil {
+			reason := "locally approved command path is not executable; rerun `multica runtime profile set-path " + profile.ID + " --path <absolute-path>` on this machine"
+			d.logger.Warn("skip custom runtime profile: locally approved command path is not executable",
+				"workspace_id", workspaceID, "profile_id", profile.ID, "error", err)
+			*failedProfiles = append(*failedProfiles, map[string]string{
+				"profile_id":   profile.ID,
+				"command_name": profile.CommandName,
+				"reason":       reason,
+			})
+			continue
+		}
+		d.logger.Info("custom runtime profile: using locally approved command",
+			"workspace_id", workspaceID, "profile_id", profile.ID, "command_path", resolved)
 		// Best-effort version detection; an empty version is acceptable. The
 		// probe carries the profile's fixed_args so a wrapper reports the
 		// version of the CLI it execs rather than its own: `ccms start q36

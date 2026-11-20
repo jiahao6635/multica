@@ -432,7 +432,7 @@ func TestDiscovery_RetriesOnlyTheWorkspacesThatStillNeedIt(t *testing.T) {
 // version of the same hazard.
 func TestDiscovery_KeepsCustomRuntimeWhenProfileFetchFails(t *testing.T) {
 	fx := newBatchFixture(t)
-	stubLookPath(t, map[string]string{"company-codex": "/opt/bin/company-codex"})
+	stubResolveProfileOverridePath(t, map[string]string{"/opt/bin/company-codex": "/opt/bin/company-codex"})
 	d := fx.daemon
 	d.cfg.Agents = map[string]AgentEntry{"codex": {Path: "/fake/codex"}}
 	fx.setWorkspaces(WorkspaceInfo{ID: "ws-1", Name: "one"})
@@ -441,6 +441,7 @@ func TestDiscovery_KeepsCustomRuntimeWhenProfileFetchFails(t *testing.T) {
 		ProtocolFamily: "codex", CommandName: "company-codex",
 		Visibility: "workspace", Enabled: true,
 	}}
+	approveRuntimeProfile(d, fx.profiles["ws-1"][0], "/opt/bin/company-codex")
 	setProbe := stubAgentProbe(t, map[string]AgentEntry{"codex": {Path: "/fake/codex"}})
 	if err := d.syncWorkspacesFromAPI(context.Background(), false); err != nil {
 		t.Fatalf("syncWorkspacesFromAPI: %v", err)
@@ -503,7 +504,7 @@ func TestDiscovery_KeepsCustomRuntimeWhenProfileFetchFails(t *testing.T) {
 // disabled runtime stayed tracked and heartbeating forever.
 func TestDiscovery_DoesNotMaskAProfileDisabledConcurrently(t *testing.T) {
 	fx := newBatchFixture(t)
-	stubLookPath(t, map[string]string{"company-codex": "/opt/bin/company-codex"})
+	stubResolveProfileOverridePath(t, map[string]string{"/opt/bin/company-codex": "/opt/bin/company-codex"})
 	d := fx.daemon
 	d.cfg.Agents = map[string]AgentEntry{"codex": {Path: "/fake/codex"}}
 	fx.setWorkspaces(WorkspaceInfo{ID: "ws-1", Name: "one"})
@@ -512,6 +513,7 @@ func TestDiscovery_DoesNotMaskAProfileDisabledConcurrently(t *testing.T) {
 		ProtocolFamily: "codex", CommandName: "company-codex",
 		Visibility: "workspace", Enabled: true,
 	}}
+	approveRuntimeProfile(d, fx.profiles["ws-1"][0], "/opt/bin/company-codex")
 	setProbe := stubAgentProbe(t, map[string]AgentEntry{"codex": {Path: "/fake/codex"}})
 	if err := d.syncWorkspacesFromAPI(context.Background(), false); err != nil {
 		t.Fatalf("syncWorkspacesFromAPI: %v", err)

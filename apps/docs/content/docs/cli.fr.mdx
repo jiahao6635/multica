@@ -410,7 +410,7 @@ Les tableaux ci-dessous couvrent toutes les commandes de premier niveau actuelle
 | | `autostart enable/disable/status` | Enregistrer ou retirer le démarrage à l'ouverture de session pour le profil courant | `status` : `--output` |
 | `runtime` | `list/usage/activity/update/rename/delete` | Consulter et gérer les runtimes | `usage` : `--days` (90 par défaut, 365 au maximum) ; `update` : `--target-version` (obligatoire), `--wait` ; `delete` : `--cascade` (dissocie les agents liés, préserve leurs données et annule leurs exécutions) |
 | | `profile list/create/update/delete` | Gérer les profils de runtime personnalisés | `create` : `--display-name`, `--command-name` (tous deux obligatoires), `--runtime-type` (ou l'ancien `--protocol-family`), `--description` ; `update` : `--enabled` |
-| | `profile set-path/unset-path <profile-id>` | Fixer le chemin d'un exécutable local (local uniquement, jamais envoyé au serveur) | |
+| | `profile set-path/unset-path <profile-id>` | Approuver ou révoquer un exécutable local et les arguments fixes actuels du profil (jamais envoyés) | `set-path` : `--path` (chemin absolu requis), `--approve-args-sha256` avec l'empreinte affichée après vérification des arguments |
 
 ### Additional
 

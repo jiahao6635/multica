@@ -224,7 +224,7 @@ Seuls les propriétaires et administrateurs de l'espace de travail peuvent crée
 3. Choisissez la famille de protocoles avec laquelle la commande est réellement compatible.
 4. Renseignez le nom, la commande et les arguments fixes, puis enregistrez.
 
-Le profil est partagé dans tout l'espace de travail. Chaque ordinateur connecté recherche la commande de son côté ; seuls les ordinateurs capables de la résoudre dans le `PATH` enregistrent le runtime correspondant. Créer un profil n'installe pas la commande et ne connecte pas les autres membres à l'outil.
+La définition du profil est partagée dans tout l'espace de travail, mais elle n'autorise aucune commande sur les ordinateurs des membres. Sur chaque ordinateur, son propriétaire doit approuver un chemin d'exécutable absolu et les arguments fixes actuels du profil avant que le daemon n'enregistre le runtime. Cette approbation reste locale ; créer un profil n'installe pas la commande et ne connecte pas les autres membres à l'outil.
 
 Le champ de commande accepte un exécutable et des arguments, pas un script shell. Les arguments simples, les guillemets et les échappements par barre oblique inverse fonctionnent ; les tubes, les redirections, `&&`, `;`, les accents graves (backticks) et l'expansion de variables d'environnement ne fonctionnent pas. Si vous avez besoin de ces comportements, placez-les dans un script d'encapsulation et utilisez ce script comme commande.
 
@@ -245,19 +245,21 @@ Auparavant, vos arguments étaient ajoutés en dernier. La plupart des commandes
 - **Les valeurs de Multica l'emportent en cas de conflit.** Si vos arguments fixes définissent une option que Multica définit aussi, la valeur de Multica arrive plus tard et prend effet. Surtout, un modèle choisi sur l'agent remplace un `--model` figé dans le profil. Pour imposer un modèle à tout le monde, laissez vide le champ du modèle des agents.
 - **Les options critiques pour le protocole sont ignorées.** `-p`, `--output-format`, `--input-format`, `--permission-mode` et leurs équivalents pour les autres familles sont retirés de vos arguments fixes, car les remplacer romprait la connexion du daemon à l'outil. Les sous-commandes et les autres arguments positionnels sont toujours transmis.
 
-Si un daemon lancé par Desktop ne trouve pas une commande que votre terminal peut exécuter, définissez un chemin absolu pour l'ordinateur courant :
+Sur chaque ordinateur qui doit héberger le profil, approuvez l'exécutable et les arguments fixes actuels :
 
 ```bash
 multica runtime profile set-path <profile-id> --path /absolute/path/to/command
+# Vérifiez les fixed_args affichés, puis relancez avec :
+multica runtime profile set-path <profile-id> --path /absolute/path/to/command --approve-args-sha256 <empreinte-affichée>
 ```
 
-Supprimer le remplacement de chemin :
+Redémarrez le daemon après avoir enregistré l'approbation. Si un administrateur modifie `fixed_args`, le daemon refuse le profil modifié avant de résoudre ou de tester l'exécutable ; vérifiez les nouveaux arguments, relancez `set-path`, puis redémarrez. Pour révoquer l'approbation :
 
 ```bash
 multica runtime profile unset-path <profile-id>
 ```
 
-Modifier un profil n'affecte que les exécutions prises en charge par la suite. Avant de supprimer un profil, occupez-vous des agents actifs encore liés à ses runtimes. Supprimer uniquement l'instance de runtime sur un ordinateur ne supprime pas le profil — un daemon en cours d'exécution le réenregistrera.
+Modifier un profil n'affecte que les exécutions prises en charge par la suite, et un changement d'arguments exige une nouvelle approbation locale. Avant de supprimer un profil, occupez-vous des agents actifs encore liés à ses runtimes. Supprimer uniquement l'instance de runtime sur un ordinateur ne supprime pas le profil — un daemon en cours d'exécution peut réenregistrer un profil approuvé.
 
 ## Runtime distant Qoder Cloud Agents
 
